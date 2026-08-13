@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import { useNightscout } from '@/hooks/use-nightscout';
+import { useAAPS } from '@/hooks/use-nightscout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -35,6 +35,10 @@ import {
   ShieldAlert,
   Link2,
   Unlink,
+  Server,
+  Globe,
+  Wifi,
+  Info,
 } from 'lucide-react';
 
 /* ------------------------------------------------------------------ */
@@ -42,16 +46,16 @@ import {
 /* ------------------------------------------------------------------ */
 function directionArrow(dir: string): string {
   const map: Record<string, string> = {
-    Flat: '→',
-    FortyFiveUp: '↗',
-    FortyFiveDown: '↘',
-    SingleUp: '↑',
-    SingleDown: '↓',
-    DoubleUp: '⇈',
-    DoubleDown: '⇊',
-    NONE: '—',
+    Flat: '\u2192',
+    FortyFiveUp: '\u2197',
+    FortyFiveDown: '\u2198',
+    SingleUp: '\u2191',
+    SingleDown: '\u2193',
+    DoubleUp: '\u21c8',
+    DoubleDown: '\u21ca',
+    NONE: '\u2014',
   };
-  return map[dir] || '—';
+  return map[dir] || '\u2014';
 }
 
 function bgColor(sgv: number): string {
@@ -66,63 +70,152 @@ function bgColor(sgv: number): string {
 /*  Connection Screen                                                  */
 /* ------------------------------------------------------------------ */
 function ConnectionScreen({
-  onConnect,
+  onNightscoutConnect,
+  onDirectConnect,
   isLoading,
   error,
 }: {
-  onConnect: (url: string, secret: string) => Promise<boolean>;
+  onNightscoutConnect: (url: string, secret: string) => Promise<boolean>;
+  onDirectConnect: (url: string, token: string) => Promise<boolean>;
   isLoading: boolean;
   error: string | null;
 }) {
-  const [url, setUrl] = useState('');
-  const [secret, setSecret] = useState('');
+  const [mode, setMode] = useState<'nightscout' | 'direct'>('direct');
+  const [nsUrl, setNsUrl] = useState('');
+  const [nsSecret, setNsSecret] = useState('');
+  const [directUrl, setDirectUrl] = useState('');
+  const [directToken, setDirectToken] = useState('');
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    await onConnect(url.trim(), secret.trim());
+    if (mode === 'nightscout') {
+      await onNightscoutConnect(nsUrl.trim(), nsSecret.trim());
+    } else {
+      await onDirectConnect(directUrl.trim(), directToken.trim());
+    }
   };
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 p-4">
-      <Card className="w-full max-w-md border-slate-700/50 bg-slate-900/80 backdrop-blur shadow-2xl">
+      <Card className="w-full max-w-lg border-slate-700/50 bg-slate-900/80 backdrop-blur shadow-2xl">
         <CardHeader className="text-center space-y-2">
           <div className="mx-auto w-16 h-16 rounded-2xl bg-cyan-500/10 flex items-center justify-center mb-2">
             <Activity className="w-8 h-8 text-cyan-400" />
           </div>
           <CardTitle className="text-2xl text-white">AndroidAPS Remote</CardTitle>
           <CardDescription className="text-slate-400">
-            连接到您的 Nightscout 实例以远程控制胰岛素泵
+            远程控制胰岛素泵 - 选择连接方式
           </CardDescription>
         </CardHeader>
         <CardContent>
+          {/* Mode selector */}
+          <div className="flex gap-2 mb-6">
+            <button
+              type="button"
+              onClick={() => setMode('direct')}
+              className={`flex-1 py-3 px-4 rounded-lg text-sm font-medium transition-all flex items-center justify-center gap-2 ${
+                mode === 'direct'
+                  ? 'bg-cyan-500/15 ring-1 ring-cyan-500/50 text-cyan-300'
+                  : 'bg-slate-800/40 text-slate-400 hover:bg-slate-800/60 hover:text-slate-300'
+              }`}
+            >
+              <Wifi className="w-4 h-4" />
+              直接连接
+            </button>
+            <button
+              type="button"
+              onClick={() => setMode('nightscout')}
+              className={`flex-1 py-3 px-4 rounded-lg text-sm font-medium transition-all flex items-center justify-center gap-2 ${
+                mode === 'nightscout'
+                  ? 'bg-cyan-500/15 ring-1 ring-cyan-500/50 text-cyan-300'
+                  : 'bg-slate-800/40 text-slate-400 hover:bg-slate-800/60 hover:text-slate-300'
+              }`}
+            >
+              <Globe className="w-4 h-4" />
+              Nightscout
+            </button>
+          </div>
+
           <form onSubmit={handleSubmit} className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="url" className="text-slate-300">
-                Nightscout URL
-              </Label>
-              <Input
-                id="url"
-                placeholder="https://your-nightscout.herokuapp.com"
-                value={url}
-                onChange={(e) => setUrl(e.target.value)}
-                className="bg-slate-800/50 border-slate-700 text-white placeholder:text-slate-500"
-                required
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="secret" className="text-slate-300">
-                API Secret
-              </Label>
-              <Input
-                id="secret"
-                type="password"
-                placeholder="Your Nightscout API secret"
-                value={secret}
-                onChange={(e) => setSecret(e.target.value)}
-                className="bg-slate-800/50 border-slate-700 text-white placeholder:text-slate-500"
-                required
-              />
-            </div>
+            {mode === 'direct' ? (
+              <>
+                <div className="space-y-2">
+                  <Label htmlFor="directUrl" className="text-slate-300 flex items-center gap-2">
+                    <Server className="w-4 h-4 text-cyan-400" />
+                    设备 HTTP 地址
+                  </Label>
+                  <Input
+                    id="directUrl"
+                    placeholder="http://192.168.1.100:8080"
+                    value={directUrl}
+                    onChange={(e) => setDirectUrl(e.target.value)}
+                    className="bg-slate-800/50 border-slate-700 text-white placeholder:text-slate-500"
+                    required
+                  />
+                  <p className="text-xs text-slate-500">
+                    Android 设备上运行的 HTTP 服务器地址（局域网 IP + 端口）
+                  </p>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="directToken" className="text-slate-300">
+                    访问令牌 (可选)
+                  </Label>
+                  <Input
+                    id="directToken"
+                    type="password"
+                    placeholder="Bearer token (如果设备配置了认证)"
+                    value={directToken}
+                    onChange={(e) => setDirectToken(e.target.value)}
+                    className="bg-slate-800/50 border-slate-700 text-white placeholder:text-slate-500"
+                  />
+                </div>
+
+                {/* Direct mode info */}
+                <div className="p-3 rounded-lg bg-cyan-500/10 border border-cyan-500/20">
+                  <div className="flex items-start gap-2">
+                    <Info className="w-4 h-4 text-cyan-400 shrink-0 mt-0.5" />
+                    <div className="text-xs text-cyan-300/80 space-y-1">
+                      <p className="font-medium text-cyan-300">直接连接模式</p>
+                      <p>
+                        需要在 Android 设备上运行 HTTP 服务器。支持 Tasker + AutoRemote、HTTP Server 应用或自定义 API 服务。
+                        Web 端将直接向设备发送指令，无需 Nightscout 中转。
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="space-y-2">
+                  <Label htmlFor="nsUrl" className="text-slate-300 flex items-center gap-2">
+                    <Globe className="w-4 h-4 text-cyan-400" />
+                    Nightscout URL
+                  </Label>
+                  <Input
+                    id="nsUrl"
+                    placeholder="https://your-nightscout.herokuapp.com"
+                    value={nsUrl}
+                    onChange={(e) => setNsUrl(e.target.value)}
+                    className="bg-slate-800/50 border-slate-700 text-white placeholder:text-slate-500"
+                    required
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="nsSecret" className="text-slate-300">
+                    API Secret
+                  </Label>
+                  <Input
+                    id="nsSecret"
+                    type="password"
+                    placeholder="Your Nightscout API secret"
+                    value={nsSecret}
+                    onChange={(e) => setNsSecret(e.target.value)}
+                    className="bg-slate-800/50 border-slate-700 text-white placeholder:text-slate-500"
+                    required
+                  />
+                </div>
+              </>
+            )}
 
             {error && (
               <div className="flex items-center gap-2 p-3 rounded-lg bg-red-500/10 border border-red-500/20">
@@ -151,8 +244,7 @@ function ConnectionScreen({
               <div className="text-xs text-amber-300/80 space-y-1">
                 <p className="font-medium text-amber-300">安全提示</p>
                 <p>
-                  本工具仅用于辅助管理，所有操作请在医疗专业人员指导下进行。请确保 Nightscout
-                  地址和 API Secret 正确无误。
+                  本工具仅用于辅助管理，所有操作请在医疗专业人员指导下进行。请确保连接地址正确无误。
                 </p>
               </div>
             </div>
@@ -557,9 +649,9 @@ function TreatmentHistory({
 /*  Main Dashboard                                                     */
 /* ------------------------------------------------------------------ */
 function Dashboard({
-  nightscout,
+  aaps,
 }: {
-  nightscout: ReturnType<typeof useNightscout>;
+  aaps: ReturnType<typeof useAAPS>;
 }) {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [confirmDialog, setConfirmDialog] = useState<{
@@ -573,16 +665,15 @@ function Dashboard({
   const refreshAll = useCallback(async () => {
     setIsRefreshing(true);
     await Promise.all([
-      nightscout.fetchTreatments(),
-      nightscout.fetchCGMEntries(),
-      nightscout.fetchDeviceStatus(),
+      aaps.fetchTreatments(),
+      aaps.fetchCGMEntries(),
+      aaps.fetchDeviceStatus(),
     ]);
     setIsRefreshing(false);
-  }, [nightscout]);
+  }, [aaps]);
 
   useEffect(() => {
     refreshAll();
-    // Auto-refresh every 60 seconds
     const interval = setInterval(refreshAll, 60000);
     return () => clearInterval(interval);
   }, [refreshAll]);
@@ -598,7 +689,7 @@ function Dashboard({
 
   const handleConfirm = async () => {
     try {
-      await nightscout.submitTreatment({
+      await aaps.submitTreatment({
         type: confirmDialog.type,
         insulin: confirmDialog.insulin,
         carbs: confirmDialog.carbs,
@@ -609,6 +700,8 @@ function Dashboard({
       // Error is handled in the hook
     }
   };
+
+  const connectionMode = aaps.config?.mode === 'direct' ? '直接连接' : 'Nightscout';
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950">
@@ -621,18 +714,31 @@ function Dashboard({
             </div>
             <div>
               <h1 className="text-white font-semibold text-sm">AndroidAPS Remote</h1>
-              <p className="text-xs text-slate-500">远程控制终端</p>
+              <p className="text-xs text-slate-500">
+                {connectionMode} · {aaps.config?.mode === 'direct' ? (aaps.config as { url: string }).url : (aaps.config as { url: string }).url}
+              </p>
             </div>
           </div>
           <div className="flex items-center gap-3">
-            <Badge variant="outline" className="border-green-500/30 text-green-400 text-xs">
-              <span className="w-1.5 h-1.5 rounded-full bg-green-400 mr-1.5 animate-pulse" />
-              已连接
+            <Badge
+              variant="outline"
+              className={`text-xs ${
+                aaps.config?.mode === 'direct'
+                  ? 'border-cyan-500/30 text-cyan-400'
+                  : 'border-green-500/30 text-green-400'
+              }`}
+            >
+              <span
+                className={`w-1.5 h-1.5 rounded-full mr-1.5 animate-pulse ${
+                  aaps.config?.mode === 'direct' ? 'bg-cyan-400' : 'bg-green-400'
+                }`}
+              />
+              {connectionMode}
             </Badge>
             <Button
               variant="ghost"
               size="sm"
-              onClick={nightscout.disconnect}
+              onClick={aaps.disconnect}
               className="text-slate-400 hover:text-red-400 hover:bg-red-500/10"
             >
               <Unlink className="w-4 h-4 mr-1" />
@@ -646,8 +752,8 @@ function Dashboard({
       <main className="max-w-6xl mx-auto px-4 py-6 space-y-6">
         {/* Status dashboard */}
         <StatusDashboard
-          cgmEntries={nightscout.cgmEntries}
-          deviceStatus={nightscout.deviceStatus}
+          cgmEntries={aaps.cgmEntries}
+          deviceStatus={aaps.deviceStatus}
           onRefresh={refreshAll}
           isRefreshing={isRefreshing}
         />
@@ -657,7 +763,7 @@ function Dashboard({
         {/* Main panels */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           {/* Treatment form */}
-          <TreatmentForm onSubmit={handleTreatmentSubmit} isLoading={nightscout.isLoading} />
+          <TreatmentForm onSubmit={handleTreatmentSubmit} isLoading={aaps.isLoading} />
 
           {/* Treatment history */}
           <div className="space-y-4">
@@ -672,7 +778,7 @@ function Dashboard({
               </TabsList>
 
               <TabsContent value="history" className="mt-4">
-                <TreatmentHistory treatments={nightscout.treatments} />
+                <TreatmentHistory treatments={aaps.treatments} />
               </TabsContent>
 
               <TabsContent value="cgm" className="mt-4">
@@ -684,11 +790,10 @@ function Dashboard({
                     </CardTitle>
                   </CardHeader>
                   <CardContent>
-                    {nightscout.cgmEntries.length > 0 ? (
+                    {aaps.cgmEntries.length > 0 ? (
                       <div className="space-y-1">
-                        {/* Simple visual chart */}
                         <div className="flex items-end gap-1 h-32 px-2">
-                          {nightscout.cgmEntries
+                          {aaps.cgmEntries
                             .slice()
                             .reverse()
                             .map((entry: { _id: string; sgv: number; direction: string; dateString: string }) => {
@@ -724,7 +829,6 @@ function Dashboard({
                               );
                             })}
                         </div>
-                        {/* Target range indicator */}
                         <div className="flex items-center gap-2 mt-2 px-2">
                           <div className="flex items-center gap-1">
                             <div className="w-2 h-2 rounded-full bg-green-500/60" />
@@ -744,19 +848,19 @@ function Dashboard({
         </div>
 
         {/* Error display */}
-        {nightscout.error && (
+        {aaps.error && (
           <Card className="border-red-500/30 bg-red-500/5">
             <CardContent className="p-4 flex items-center gap-3">
               <XCircle className="w-5 h-5 text-red-400 shrink-0" />
               <div>
                 <p className="text-sm text-red-400 font-medium">操作失败</p>
-                <p className="text-xs text-red-400/70">{nightscout.error}</p>
+                <p className="text-xs text-red-400/70">{aaps.error}</p>
               </div>
               <Button
                 variant="ghost"
                 size="sm"
                 className="ml-auto text-red-400 hover:text-red-300"
-                onClick={() => nightscout.setError(null)}
+                onClick={() => aaps.setError(null)}
               >
                 关闭
               </Button>
@@ -834,21 +938,26 @@ function Dashboard({
 /*  Root Page                                                          */
 /* ------------------------------------------------------------------ */
 export default function Home() {
-  const nightscout = useNightscout();
+  const aaps = useAAPS();
 
-  const handleConnect = async (url: string, secret: string) => {
-    return nightscout.testConnection({ url, apiSecret: secret });
+  const handleNightscoutConnect = async (url: string, secret: string) => {
+    return aaps.testNightscoutConnection(url, secret);
   };
 
-  if (!nightscout.isConnected) {
+  const handleDirectConnect = async (url: string, token: string) => {
+    return aaps.testDirectConnection(url, token);
+  };
+
+  if (!aaps.isConnected) {
     return (
       <ConnectionScreen
-        onConnect={handleConnect}
-        isLoading={nightscout.isLoading}
-        error={nightscout.error}
+        onNightscoutConnect={handleNightscoutConnect}
+        onDirectConnect={handleDirectConnect}
+        isLoading={aaps.isLoading}
+        error={aaps.error}
       />
     );
   }
 
-  return <Dashboard nightscout={nightscout} />;
+  return <Dashboard aaps={aaps} />;
 }

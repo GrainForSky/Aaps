@@ -1,7 +1,18 @@
+export type ConnectionMode = 'nightscout' | 'direct';
+
 export interface NightscoutConfig {
+  mode: 'nightscout';
   url: string;
   apiSecret: string;
 }
+
+export interface DirectAPIConfig {
+  mode: 'direct';
+  url: string;
+  token?: string;
+}
+
+export type AppConfig = NightscoutConfig | DirectAPIConfig;
 
 export interface Treatment {
   type: 'insulin' | 'carbs' | 'both';
