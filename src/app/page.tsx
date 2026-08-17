@@ -450,6 +450,31 @@ function StatusPanel({ status, cgm, onRefresh, refreshing }: {
 }
 
 // ============================================================
+// Delivery Status Banner
+// ============================================================
+function DeliveryStatusBanner({ result }: { result: import('@/hooks/use-sms-command').DeliveryConfirmResult }) {
+  const statusConfig = {
+    idle: { icon: null, color: '', text: '' },
+    sending_sms: { icon: <Loader2 className="w-4 h-4 animate-spin" />, color: 'text-cyan-400 bg-cyan-500/10 border-cyan-500/30', text: '正在发送短信命令...' },
+    sms_sent: { icon: <Send className="w-4 h-4" />, color: 'text-blue-400 bg-blue-500/10 border-blue-500/30', text: '短信已发送，等待 AndroidAPS 执行...' },
+    confirming: { icon: <Loader2 className="w-4 h-4 animate-spin" />, color: 'text-amber-400 bg-amber-500/10 border-amber-500/30', text: '正在通过 Nightscout 确认输注结果...' },
+    confirmed: { icon: <CheckCircle2 className="w-4 h-4" />, color: 'text-green-400 bg-green-500/10 border-green-500/30', text: result.message },
+    timeout: { icon: <AlertTriangle className="w-4 h-4" />, color: 'text-orange-400 bg-orange-500/10 border-orange-500/30', text: result.message },
+    failed: { icon: <XCircle className="w-4 h-4" />, color: 'text-red-400 bg-red-500/10 border-red-500/30', text: result.message },
+  };
+
+  const config = statusConfig[result.status];
+  if (!config.icon) return null;
+
+  return (
+    <div className={`p-3 rounded-md border flex items-center gap-2 ${config.color}`}>
+      {config.icon}
+      <p className="text-sm">{config.text}</p>
+    </div>
+  );
+}
+
+// ============================================================
 // Bolus / Carbs Input
 // ============================================================
 function BolusCarbsPanel({
@@ -458,14 +483,14 @@ function BolusCarbsPanel({
   onCarbs,
   onMixed,
   isSending,
-  lastResult,
+  deliveryResult,
 }: {
   safetyLock: ReturnType<typeof useSafetyLock>;
   onBolus: (amount: number) => void;
   onCarbs: (amount: number) => void;
   onMixed: (insulin: number, carbs: number) => void;
   isSending: boolean;
-  lastResult: { success: boolean; error?: string } | null;
+  deliveryResult: import('@/hooks/use-sms-command').DeliveryConfirmResult | null;
 }) {
   const [insulin, setInsulin] = useState('');
   const [carbs, setCarbs] = useState('');
@@ -591,12 +616,8 @@ function BolusCarbsPanel({
       )}
 
       {/* SMS Result */}
-      {lastResult && (
-        <div className={`p-3 rounded-md border ${lastResult.success ? 'bg-green-500/10 border-green-500/30' : 'bg-red-500/10 border-red-500/30'}`}>
-          <p className={`text-sm ${lastResult.success ? 'text-green-400' : 'text-red-400'}`}>
-            {lastResult.success ? '✓ 短信已发送，请等待 AndroidAPS 执行' : `✗ ${lastResult.error}`}
-          </p>
-        </div>
+      {deliveryResult && (
+        <DeliveryStatusBanner result={deliveryResult} />
       )}
 
       {/* Confirm Dialog */}
@@ -725,21 +746,19 @@ function Dashboard({
   }, [fetchData]);
 
   const handleBolus = async (amount: number) => {
-    const result = await smsCmd.sendCommand('bolus', { insulin: amount });
-    if (result.success) safetyLock.recordBolus();
+    const result = await smsCmd.sendAndConfirm('bolus', { insulin: amount }, nsUrl, nsSecret);
+    if (result.status === 'confirmed') safetyLock.recordBolus();
   };
 
   const handleCarbs = async (amount: number) => {
-    const result = await smsCmd.sendCommand('carbs', { carbs: amount });
-    if (result.success) safetyLock.recordCarbs();
+    const result = await smsCmd.sendAndConfirm('carbs', { carbs: amount }, nsUrl, nsSecret);
+    if (result.status === 'confirmed') safetyLock.recordCarbs();
   };
 
   const handleMixed = async (insulin: number, carbs: number) => {
-    // Send two separate SMS commands
-    const r1 = await smsCmd.sendCommand('bolus', { insulin });
-    if (r1.success) {
+    const result = await smsCmd.sendAndConfirm('mixed', { insulin, carbs }, nsUrl, nsSecret);
+    if (result.status === 'confirmed') {
       safetyLock.recordBolus();
-      await smsCmd.sendCommand('carbs', { carbs });
       safetyLock.recordCarbs();
     }
   };
@@ -799,7 +818,7 @@ function Dashboard({
               onCarbs={handleCarbs}
               onMixed={handleMixed}
               isSending={smsCmd.isSending}
-              lastResult={smsCmd.lastResult}
+              deliveryResult={smsCmd.result}
             />
           </TabsContent>
 
