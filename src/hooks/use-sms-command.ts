@@ -39,10 +39,12 @@ interface UseSMSCommandReturn {
  * SMS 命令发送 + Nightscout 输注结果确认 Hook
  *
  * 流程：
- * 1. 通过 SMS 网关发送命令到 AndroidAPS 手机
- * 2. 等待 5 秒（让 AndroidAPS 执行并上传到 Nightscout）
- * 3. 轮询 Nightscout /api/v1/treatments 查找匹配的治疗记录
- * 4. 找到匹配记录 → 确认成功；超时 60 秒未找到 → 超时
+ * 1. 记录发送前时间戳 T
+ * 2. 通过 SMS 网关发送命令到 AndroidAPS 手机
+ * 3. 等待 8 秒（让 AndroidAPS 执行并上传到 Nightscout）
+ * 4. 每 10 秒轮询 Nightscout /api/v1/treatments，最长等待 120 秒
+ * 5. 匹配策略：时间窗口 + 类型 + 剂量 + enteredBy 标识
+ * 6. 找到匹配记录 → 确认成功；超时 120 秒未找到 → 超时
  */
 export function useSMSCommand(gateway: SMSGatewayConfig | null): UseSMSCommandReturn {
   const [status, setStatus] = useState<DeliveryConfirmStatus>('idle');
@@ -51,7 +53,11 @@ export function useSMSCommand(gateway: SMSGatewayConfig | null): UseSMSCommandRe
 
   /**
    * 轮询 Nightscout 查找匹配的治疗记录
-   * 在发送 SMS 后的指定时间内反复查询，直到找到匹配记录或超时
+   *
+   * 匹配策略（优先级从高到低）：
+   * 1. enteredBy 包含 "AndroidAPS" 或 "SMS" → 高置信度匹配
+   * 2. 时间窗口内 + 类型一致 + 剂量一致 → 普通匹配
+   * 3. 多条匹配时取时间最接近 sentAt 的记录
    */
   const pollNightscoutForTreatment = useCallback(
     async (
@@ -61,8 +67,16 @@ export function useSMSCommand(gateway: SMSGatewayConfig | null): UseSMSCommandRe
       apiSecret: string,
       sentAt: number,
     ): Promise<{ found: boolean; treatment?: TreatmentRecord }> => {
-      const MAX_POLL_TIME = 60_000; // 最长等待 60 秒
-      const POLL_INTERVAL = 5_000;   // 每 5 秒轮询一次
+      const MAX_POLL_TIME = 120_000; // 最长等待 120 秒
+      const POLL_INTERVAL = 10_000;   // 每 10 秒轮询一次
+      const INITIAL_WAIT = 8_000;     // 首次查询前等待 8 秒
+      const TIME_TOLERANCE = 30_000;  // 时间容差 30 秒（AndroidAPS 上传可能有延迟）
+      const INSULIN_TOLERANCE = 0.05; // 胰岛素剂量容差 0.05U
+      const CARBS_TOLERANCE = 1;      // 碳水容差 1g
+
+      // 首次等待，让 AndroidAPS 有时间执行并上传
+      await new Promise(r => setTimeout(r, INITIAL_WAIT));
+
       const startTime = Date.now();
 
       while (Date.now() - startTime < MAX_POLL_TIME) {
@@ -71,7 +85,6 @@ export function useSMSCommand(gateway: SMSGatewayConfig | null): UseSMSCommandRe
         try {
           const headers: Record<string, string> = {};
           if (apiSecret) {
-            // SHA1 hash for Nightscout API
             const encoder = new TextEncoder();
             const data = encoder.encode(apiSecret);
             const hashBuffer = await crypto.subtle.digest('SHA-1', data);
@@ -80,7 +93,7 @@ export function useSMSCommand(gateway: SMSGatewayConfig | null): UseSMSCommandRe
             headers['api-secret'] = hashHex;
           }
 
-          const count = 10;
+          const count = 20;
           const url = `${nightscoutUrl}/api/v1/treatments?count=${count}`;
           const res = await fetch(url, { headers });
 
@@ -91,46 +104,90 @@ export function useSMSCommand(gateway: SMSGatewayConfig | null): UseSMSCommandRe
 
           const treatments: TreatmentRecord[] = await res.json();
 
-          // 查找匹配的治疗记录
+          // 收集所有候选记录并评分
+          interface Candidate {
+            treatment: TreatmentRecord;
+            score: number; // 越高越可能是我们的命令产生的
+            timeDiff: number;
+          }
+          const candidates: Candidate[] = [];
+
           for (const t of treatments) {
             const treatmentTime = new Date(t.created_at || '').getTime();
-            // 记录时间应在发送时间之后（允许 5 秒误差）
-            if (treatmentTime < sentAt - 5000) continue;
-            // 记录时间不应超过当前时间 + 10 秒（排除未来记录）
+            if (isNaN(treatmentTime)) continue;
+
+            // 时间窗口：记录必须在 sentAt 之后（允许 TIME_TOLERANCE 误差）
+            // 且不超过当前时间 + 10 秒
+            if (treatmentTime < sentAt - TIME_TOLERANCE) continue;
             if (treatmentTime > Date.now() + 10000) continue;
+
+            const timeDiff = Math.abs(treatmentTime - sentAt);
+            const enteredBy = (t.enteredBy || '').toLowerCase();
+            const notes = (t.notes || '').toLowerCase();
+
+            // 判断 enteredBy 是否来自 AndroidAPS SMS
+            const isFromAAPS = enteredBy.includes('androidaps') ||
+                               enteredBy.includes('sms') ||
+                               enteredBy.includes('aaps');
+            // 判断 notes 是否包含 SMS 相关标记
+            const hasSMSNote = notes.includes('sms') ||
+                               notes.includes('remote') ||
+                               notes.includes('远程');
+
+            let matched = false;
 
             if (type === 'bolus' || type === 'mixed') {
               if (t.eventType === 'Bolus' && t.insulin !== undefined) {
-                // 匹配胰岛素剂量（允许 0.1U 误差）
-                if (params.insulin !== undefined && Math.abs(t.insulin - params.insulin) < 0.15) {
-                  return { found: true, treatment: t };
+                if (params.insulin !== undefined && Math.abs(t.insulin - params.insulin) <= INSULIN_TOLERANCE) {
+                  matched = true;
+                }
+              }
+              // 混合输注也可能记录为 Meal Bolus
+              if (type === 'mixed' && (t.eventType === 'Meal Bolus' || t.eventType === 'Correction Bolus')) {
+                if (t.insulin !== undefined && params.insulin !== undefined && Math.abs(t.insulin - params.insulin) <= INSULIN_TOLERANCE) {
+                  matched = true;
                 }
               }
             }
 
             if (type === 'carbs' || type === 'mixed') {
               if (t.eventType === 'Carbs' && t.carbs !== undefined) {
-                // 匹配碳水剂量（允许 1g 误差）
-                if (params.carbs !== undefined && Math.abs(t.carbs - params.carbs) < 1.5) {
-                  return { found: true, treatment: t };
+                if (params.carbs !== undefined && Math.abs(t.carbs - params.carbs) <= CARBS_TOLERANCE) {
+                  matched = true;
                 }
               }
             }
 
-            // 混合输注可能记录为一条 Combined 记录
+            // 混合输注的 Combined 记录
             if (type === 'mixed' && (t.eventType === 'Combined' || t.eventType === 'Meal Bolus')) {
-              const insulinMatch = params.insulin === undefined || (t.insulin !== undefined && Math.abs(t.insulin - params.insulin) < 0.15);
-              const carbsMatch = params.carbs === undefined || (t.carbs !== undefined && Math.abs(t.carbs - params.carbs) < 1.5);
+              const insulinMatch = params.insulin === undefined || (t.insulin !== undefined && Math.abs(t.insulin - params.insulin) <= INSULIN_TOLERANCE);
+              const carbsMatch = params.carbs === undefined || (t.carbs !== undefined && Math.abs(t.carbs - params.carbs) <= CARBS_TOLERANCE);
               if (insulinMatch && carbsMatch) {
-                return { found: true, treatment: t };
+                matched = true;
               }
             }
+
+            if (matched) {
+              // 评分：enteredBy 来自 AAPS +100，有 SMS 标记 +50，时间接近加分
+              let score = 0;
+              if (isFromAAPS) score += 100;
+              if (hasSMSNote) score += 50;
+              // 时间越近分数越高（最高 30 分）
+              score += Math.max(0, 30 - Math.floor(timeDiff / 1000));
+
+              candidates.push({ treatment: t, score, timeDiff });
+            }
+          }
+
+          if (candidates.length > 0) {
+            // 按评分降序排列，取最高分的
+            candidates.sort((a, b) => b.score - a.score);
+            return { found: true, treatment: candidates[0].treatment };
           }
         } catch {
           // 网络错误，继续轮询
         }
 
-        // 等待后重试
         await new Promise(r => setTimeout(r, POLL_INTERVAL));
       }
 
