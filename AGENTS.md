@@ -1,7 +1,7 @@
 # AGENTS.md - AndroidAPS Remote Control
 
 ## 项目概览
-AndroidAPS 远程控制面板，通过 Nightscout REST API 与 AndroidAPS 胰岛素泵系统通信，实现远程胰岛素输注、碳水记录和输注结果确认。
+AndroidAPS 远程控制面板，支持三种连接模式：直接 HTTP API、SMS 网关、Nightscout API。实现远程胰岛素输注、碳水记录、输注结果确认和安全保护机制。
 
 ## 技术栈
 - **Framework**: Next.js 16 (App Router)
@@ -21,13 +21,30 @@ src/
 │   │   │   ├── status/route.ts   # 设备状态 (GET)
 │   │   │   ├── entries/route.ts  # CGM 血糖数据 (GET)
 │   │   │   └── ping/route.ts     # 健康检查 (GET)
-│   │   └── direct/route.ts   # 直接 HTTP API 代理 (GET/POST)
+│   │   ├── direct/route.ts   # 直接 HTTP API 代理 (GET/POST)
+│   │   └── sms/route.ts      # SMS 网关发送命令 (POST)
 │   ├── layout.tsx            # 根布局
 │   ├── page.tsx              # 主页面（连接 + 控制面板）
 │   └── globals.css           # 全局样式
 ├── components/ui/            # shadcn/ui 组件库
 ├── hooks/
-│   └── use-nightscout.ts     # AAPS 连接管理 Hook (支持双模式)
+│   ├── use-nightscout.ts     # AAPS 连接管理 Hook (支持三模式)
+│   ├── use-safety-lock.ts    # 安全锁定 Hook (胰岛素15分钟/碳水1分钟)
+│   └── use-direct-api.ts     # 直接 API Hook (含重试和结果确认)
+├── lib/
+│   ├── types.ts              # 类型定义 (含命令结果、重试配置)
+│   └── utils.ts              # 工具函数
+android-app/                  # Android 端 HTTP API 服务
+├── app/src/main/java/com/aaps/remote/
+│   ├── api/RemoteAPIServer.kt    # HTTP 服务器 (NanoHTTPD)
+│   ├── aaps/AAPSController.kt    # AndroidAPS 交互控制器
+│   ├── aaps/CommandResult.kt     # 命令结果模型
+│   ├── aaps/CommandResultReceiver.kt # 结果广播接收器
+│   ├── service/RemoteAPIService.kt   # 前台服务
+│   ├── util/TokenAuth.kt         # Token 认证
+│   └── MainActivity.kt           # 主界面
+└── SOLUTION.md               # 完整方案文档
+```
 └── lib/
     ├── types.ts              # 类型定义 (含双模式配置)
     └── utils.ts              # 工具函数

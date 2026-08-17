@@ -105,3 +105,43 @@ export const SAFETY_RULES = {
   MAX_BOLUS_UNITS: 25,
   MAX_CARBS_GRAMS: 150,
 } as const;
+
+// Direct API command result types
+export type CommandStatus = 'pending' | 'executing' | 'completed' | 'failed' | 'timeout';
+
+export interface DirectAPICommandResponse {
+  status: 'accepted';
+  requestId: string;
+  type: 'bolus' | 'carbs' | 'treatment';
+  insulin?: number;
+  carbs?: number;
+  message: string;
+  resultUrl: string;
+}
+
+export interface DirectAPICommandResult {
+  requestId: string;
+  type: 'bolus' | 'carbs' | 'treatment';
+  status: CommandStatus;
+  requestedAmount: number;
+  deliveredAmount: number;
+  success: boolean;
+  message: string;
+  createdAt: number;
+  completedAt?: number;
+}
+
+// Retry configuration
+export interface RetryConfig {
+  maxRetries: number;
+  retryDelayMs: number;
+  timeoutMs: number;
+  pollIntervalMs: number;
+}
+
+export const DEFAULT_RETRY_CONFIG: RetryConfig = {
+  maxRetries: 2,
+  retryDelayMs: 3000,
+  timeoutMs: 30000,
+  pollIntervalMs: 2000,
+};

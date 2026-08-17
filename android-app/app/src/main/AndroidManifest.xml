@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.aaps.remote">
+
+    <!-- Permissions -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.RECEIVE_SMS" />
+    <uses-permission android:name="android.permission.SEND_SMS" />
+    <uses-permission android:name="android.permission.READ_PHONE_STATE" />
+    <uses-permission android:name="android.permission.READ_PHONE_NUMBERS" />
+    
+    <!-- AndroidAPS permissions -->
+    <uses-permission android:name="info.nightscout.androidaps.permission.READ" />
+    <uses-permission android:name="info.nightscout.androidaps.permission.WRITE" />
+
+    <application
+        android:allowBackup="false"
+        android:label="AAPS Remote"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.AAPSRemote">
+
+        <!-- Main Activity -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:label="AAPS Remote API">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- Remote API Service -->
+        <service
+            android:name=".service.RemoteAPIService"
+            android:exported="false"
+            android:foregroundServiceType="connectedDevice" />
+
+        <!-- Broadcast Receiver for AAPS command results -->
+        <receiver
+            android:name=".aaps.CommandResultReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="info.nightscout.androidaps.action.COMMAND_RESULT" />
+            </intent-filter>
+        </receiver>
+
+    </application>
+</manifest>
