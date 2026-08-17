@@ -1,285 +1,164 @@
 import { NextRequest, NextResponse } from 'next/server';
-import crypto from 'crypto';
+import type { SMSGatewayConfig, SMSSendResult } from '@/lib/types';
 
 /**
  * SMS Gateway API Route
- * Sends commands via SMS gateway to AndroidAPS phone
- * AndroidAPS SMS Communicator will receive and execute the commands
+ * Sends SMS commands to AndroidAPS phone via configured SMS gateway.
+ * AndroidAPS SMS Communicator receives the SMS and executes the command.
  */
 
-interface SMSConfig {
-  provider: 'generic' | 'twilio' | 'aliyun' | 'tencent';
-  apiUrl: string;
-  apiKey: string;
-  apiSecret?: string;
-  fromNumber?: string;
-  toNumber: string;
-  signName?: string;
-  templateCode?: string;
-}
-
-function formatSMSCommand(type: string, value?: number): string {
+function formatSMSCommand(type: string, params: Record<string, number | string>): string {
   switch (type) {
     case 'bolus':
-      return `BOLUS ${value}`;
+      return `BOLUS ${params.insulin}`;
     case 'carbs':
-      return `CARBS ${value}`;
-    case 'treatment':
-      return `BOLUS ${value}`;
+      return `CARBS ${params.carbs}`;
     case 'status':
       return 'STATUS';
-    case 'bg':
-      return `BG ${value}`;
     case 'suspend':
       return 'SUSPEND';
     case 'resume':
       return 'RESUME';
-    case 'loop':
-      return 'LOOP';
+    case 'target':
+      return `TARGET ${params.low} ${params.high} ${params.duration}`;
     default:
-      return type.toUpperCase();
+      return String(params.text || '');
   }
 }
 
-async function sendViaTwilio(
-  config: SMSConfig,
-  message: string
-): Promise<{ success: boolean; error?: string }> {
+async function sendViaAliyun(config: SMSGatewayConfig, to: string, message: string): Promise<SMSSendResult> {
+  // 阿里云短信使用模板发送，这里将 message 作为模板变量传递
+  const params = new URLSearchParams({
+    Action: 'SendSms',
+    PhoneNumbers: to,
+    SignName: config.signName || '',
+    TemplateCode: config.templateCode || '',
+    TemplateParam: JSON.stringify({ content: message }),
+    Format: 'JSON',
+    Version: '2017-05-25',
+    AccessKeyId: config.apiKey,
+  });
+
   try {
-    const credentials = Buffer.from(
-      `${config.apiKey}:${config.apiSecret}`
-    ).toString('base64');
-
-    const response = await fetch(
-      `https://api.twilio.com/2010-04-01/Accounts/${config.apiKey}/Messages.json`,
-      {
-        method: 'POST',
-        headers: {
-          Authorization: `Basic ${credentials}`,
-          'Content-Type': 'application/x-www-form-urlencoded',
-        },
-        body: new URLSearchParams({
-          From: config.fromNumber || '',
-          To: config.toNumber,
-          Body: message,
-        }),
-      }
-    );
-
-    if (!response.ok) {
-      const error = await response.text();
-      return { success: false, error: `Twilio API error: ${error}` };
-    }
-
-    return { success: true };
-  } catch (error) {
-    return {
-      success: false,
-      error: error instanceof Error ? error.message : 'Unknown error',
-    };
-  }
-}
-
-async function sendViaAliyun(
-  config: SMSConfig,
-  message: string
-): Promise<{ success: boolean; error?: string }> {
-  try {
-    const params: Record<string, string> = {
-      AccessKeyId: config.apiKey,
-      Action: 'SendSms',
-      Format: 'JSON',
-      PhoneNumbers: config.toNumber,
-      RegionId: 'cn-hangzhou',
-      SignName: config.signName || '',
-      SignatureMethod: 'HMAC-SHA1',
-      SignatureNonce: crypto.randomUUID(),
-      SignatureVersion: '1.0',
-      TemplateCode: config.templateCode || '',
-      TemplateParam: JSON.stringify({ content: message }),
-      Timestamp: new Date().toISOString().replace(/\.\d{3}Z$/, 'Z'),
-      Version: '2017-05-25',
-    };
-
-    const sortedParams = Object.keys(params)
-      .sort()
-      .map(
-        (key) =>
-          `${encodeURIComponent(key)}=${encodeURIComponent(params[key])}`
-      )
-      .join('&');
-
-    const stringToSign = `POST&${encodeURIComponent('/')}&${encodeURIComponent(sortedParams)}`;
-    const signature = crypto
-      .createHmac('sha1', `${config.apiSecret}&`)
-      .update(stringToSign)
-      .digest('base64');
-
-    params.Signature = signature;
-
-    const response = await fetch(config.apiUrl, {
+    const res = await fetch(`${config.apiUrl}?${params}`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        url: config.apiUrl,
-        params,
-      }),
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      signal: AbortSignal.timeout(15000),
     });
-
-    if (!response.ok) {
-      const error = await response.text();
-      return { success: false, error: `Aliyun SMS API error: ${error}` };
+    const data = await res.json();
+    if (data.Code === 'OK') {
+      return { success: true, messageId: data.BizId };
     }
-
-    return { success: true };
-  } catch (error) {
-    return {
-      success: false,
-      error: error instanceof Error ? error.message : 'Unknown error',
-    };
+    return { success: false, error: `阿里云短信错误: ${data.Message || data.Code}` };
+  } catch (err) {
+    return { success: false, error: `阿里云短信发送失败: ${err instanceof Error ? err.message : '未知错误'}` };
   }
 }
 
-async function sendViaTencent(
-  config: SMSConfig,
-  message: string
-): Promise<{ success: boolean; error?: string }> {
+async function sendViaTwilio(config: SMSGatewayConfig, to: string, message: string): Promise<SMSSendResult> {
   try {
-    const timestamp = Math.floor(Date.now() / 1000);
-    const payload = JSON.stringify({
-      PhoneNumber: config.toNumber,
-      SmsSdkAppId: config.apiKey,
-      SignName: config.signName || '',
-      TemplateId: config.templateCode || '',
-      TemplateParamSet: [message],
+    const body = new URLSearchParams({
+      To: to,
+      From: config.fromNumber,
+      Body: message,
     });
 
-    const response = await fetch(config.apiUrl, {
+    const res = await fetch(config.apiUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Authorization': 'Basic ' + Buffer.from(`${config.apiKey}:${config.apiSecret}`).toString('base64'),
+      },
+      body: body.toString(),
+      signal: AbortSignal.timeout(15000),
+    });
+    const data = await res.json();
+    if (data.sid) {
+      return { success: true, messageId: data.sid };
+    }
+    return { success: false, error: `Twilio 错误: ${data.message || '未知错误'}` };
+  } catch (err) {
+    return { success: false, error: `Twilio 发送失败: ${err instanceof Error ? err.message : '未知错误'}` };
+  }
+}
+
+async function sendViaGeneric(config: SMSGatewayConfig, to: string, message: string): Promise<SMSSendResult> {
+  try {
+    const res = await fetch(config.apiUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${config.apiSecret}`,
-        'X-TC-Timestamp': timestamp.toString(),
+        'Authorization': `Bearer ${config.apiKey}`,
       },
-      body: payload,
+      body: JSON.stringify({ to, message, from: config.fromNumber }),
+      signal: AbortSignal.timeout(15000),
     });
-
-    if (!response.ok) {
-      const error = await response.text();
-      return { success: false, error: `Tencent SMS API error: ${error}` };
+    const data = await res.json();
+    if (data.success || data.messageId || data.id) {
+      return { success: true, messageId: data.messageId || data.id };
     }
-
-    return { success: true };
-  } catch (error) {
-    return {
-      success: false,
-      error: error instanceof Error ? error.message : 'Unknown error',
-    };
+    return { success: false, error: `网关错误: ${data.error || data.message || '未知错误'}` };
+  } catch (err) {
+    return { success: false, error: `网关发送失败: ${err instanceof Error ? err.message : '未知错误'}` };
   }
 }
 
-async function sendViaGeneric(
-  config: SMSConfig,
-  message: string
-): Promise<{ success: boolean; error?: string }> {
-  try {
-    const response = await fetch(config.apiUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${config.apiKey}`,
-      },
-      body: JSON.stringify({
-        to: config.toNumber,
-        from: config.fromNumber,
-        message: message,
-      }),
-    });
-
-    if (!response.ok) {
-      const error = await response.text();
-      return { success: false, error: `SMS API error: ${error}` };
-    }
-
-    return { success: true };
-  } catch (error) {
-    return {
-      success: false,
-      error: error instanceof Error ? error.message : 'Unknown error',
-    };
-  }
-}
-
-async function sendSMS(
-  config: SMSConfig,
-  message: string
-): Promise<{ success: boolean; error?: string }> {
+async function sendSMS(config: SMSGatewayConfig, to: string, message: string): Promise<SMSSendResult> {
   switch (config.provider) {
-    case 'twilio':
-      return sendViaTwilio(config, message);
     case 'aliyun':
-      return sendViaAliyun(config, message);
+      return sendViaAliyun(config, to, message);
     case 'tencent':
-      return sendViaTencent(config, message);
+      // 腾讯云与阿里云类似，使用模板发送
+      return sendViaAliyun(config, to, message);
+    case 'twilio':
+      return sendViaTwilio(config, to, message);
     case 'generic':
     default:
-      return sendViaGeneric(config, message);
+      return sendViaGeneric(config, to, message);
   }
 }
 
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { gateway, action, value } = body as {
-      gateway: SMSConfig;
-      action: string;
-      value?: number;
+    const { gateway, commandType, params } = body as {
+      gateway: SMSGatewayConfig;
+      commandType: string;
+      params: Record<string, number | string>;
     };
 
-    if (!gateway) {
+    if (!gateway || !commandType) {
       return NextResponse.json(
-        { error: '缺少 SMS 网关配置' },
-        { status: 400 }
-      );
-    }
-
-    if (!action) {
-      return NextResponse.json(
-        { error: '缺少操作类型' },
+        { success: false, error: '缺少 SMS 网关配置或命令类型' },
         { status: 400 }
       );
     }
 
     if (!gateway.toNumber) {
       return NextResponse.json(
-        { error: '缺少目标手机号' },
+        { success: false, error: '缺少接收方手机号' },
         { status: 400 }
       );
     }
 
-    const smsMessage = formatSMSCommand(action, value);
-    const result = await sendSMS(gateway, smsMessage);
+    const smsText = formatSMSCommand(commandType, params);
+    console.log(`[SMS] Sending to ${gateway.toNumber}: ${smsText}`);
 
-    if (!result.success) {
-      return NextResponse.json(
-        { error: `短信发送失败: ${result.error}`, detail: result.error },
-        { status: 502 }
-      );
-    }
+    const result = await sendSMS(gateway, gateway.toNumber, smsText);
 
     return NextResponse.json({
-      success: true,
+      success: result.success,
       data: {
-        message: '命令已通过短信发送',
-        smsCommand: smsMessage,
-        sentTo: gateway.toNumber,
+        command: smsText,
+        to: gateway.toNumber,
+        messageId: result.messageId,
+        error: result.error,
       },
+      error: result.error,
     });
   } catch (error) {
-    const errorMessage =
-      error instanceof Error ? error.message : 'Unknown error';
     return NextResponse.json(
-      { error: `发送失败: ${errorMessage}` },
+      { success: false, error: `SMS 发送异常: ${error instanceof Error ? error.message : '未知错误'}` },
       { status: 500 }
     );
   }

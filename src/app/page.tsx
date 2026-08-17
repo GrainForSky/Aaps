@@ -1,833 +1,894 @@
 'use client';
 
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { useSafetyLock, formatCountdown } from '@/hooks/use-safety-lock';
-import { SAFETY_RULES } from '@/lib/types';
-import type { SMSGatewayConfig, DirectAPICommandResult } from '@/lib/types';
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import {
-  Card, CardContent, CardDescription, CardHeader, CardTitle,
-} from '@/components/ui/card';
-import {
-  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
-  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
-} from '@/components/ui/alert-dialog';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import {
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
 } from '@/components/ui/select';
 import {
-  Activity, Droplets, Battery, AlertTriangle, Send, Clock,
-  Shield, CheckCircle2, XCircle, Loader2, Phone, Settings,
-  BarChart3, LogOut, RefreshCw, Lock,
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
+import {
+  Activity,
+  Droplets,
+  Battery,
+  Send,
+  Settings,
+  LogOut,
+  RefreshCw,
+  CheckCircle2,
+  XCircle,
+  Loader2,
+  Phone,
+  AlertTriangle,
+  Lock,
 } from 'lucide-react';
+import type {
+  UserSession,
+  AppConfig,
+  SMSGatewayConfig,
+  NightscoutConfig,
+  TreatmentRecord,
+  CGMEntry,
+  DeviceStatus,
+  SafetyLock,
+} from '@/lib/types';
+import { SAFETY_RULES, SMS_PROVIDER_PRESETS } from '@/lib/types';
+import { useSafetyLock } from '@/hooks/use-safety-lock';
+import { useSMSCommand } from '@/hooks/use-sms-command';
 
-/* ─────────────────────── Types ─────────────────────── */
-
-interface AuthState {
-  token: string;
-  phone: string;
-}
-
-interface AppConfig {
-  nightscoutUrl: string;
-  apiSecret: string;
-  deviceUrl: string;
-  deviceToken: string;
-}
-
-interface NightscoutStatus {
-  reservoir: number;
-  battery: number;
-  isSuspended: boolean;
-  isBolusInProgress: boolean;
-  pumpType: string;
-}
-
-interface CGMEntry {
-  sgv: number;
-  direction: string;
-  date: number;
-}
-
-interface TreatmentRecord {
-  _id: string;
-  eventType: string;
-  insulin?: number;
-  carbs?: number;
-  created_at: string;
-  notes?: string;
-}
-
-/* ─────────────────────── API Helpers ─────────────────────── */
-
-async function apiLogin(deviceUrl: string, phone: string): Promise<{ token: string }> {
-  const res = await fetch('/api/direct', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ deviceUrl, action: 'auth', phone }),
-  });
-  const json = await res.json();
-  if (!json.success) throw new Error(json.error || '登录失败');
-  return { token: json.data.token };
-}
-
-async function apiBolus(deviceUrl: string, token: string, insulin: number, phone: string): Promise<DirectAPICommandResult> {
-  const res = await fetch('/api/direct', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ deviceUrl, deviceToken: token, action: 'bolus', insulin, phone }),
-  });
-  const json = await res.json();
-  if (!json.success) throw new Error(json.error || '输注失败');
-  return json.data;
-}
-
-async function apiCarbs(deviceUrl: string, token: string, carbs: number, phone: string): Promise<DirectAPICommandResult> {
-  const res = await fetch('/api/direct', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ deviceUrl, deviceToken: token, action: 'carbs', carbs, phone }),
-  });
-  const json = await res.json();
-  if (!json.success) throw new Error(json.error || '记录失败');
-  return json.data;
-}
-
-async function apiStatus(deviceUrl: string, token: string): Promise<NightscoutStatus> {
-  const res = await fetch(`/api/direct?deviceUrl=${encodeURIComponent(deviceUrl)}&deviceToken=${encodeURIComponent(token)}&action=status`);
-  const json = await res.json();
-  if (!json.success) throw new Error(json.error || '获取状态失败');
-  return json.data;
-}
-
-async function fetchNSTreatments(nsUrl: string, secret: string, count = 20): Promise<TreatmentRecord[]> {
-  const res = await fetch(`/api/nightscout/treatments?url=${encodeURIComponent(nsUrl)}&secret=${encodeURIComponent(secret)}&count=${count}`);
-  const json = await res.json();
-  if (!json.success) return [];
-  return json.data || [];
-}
-
-async function fetchNSEntries(nsUrl: string, secret: string, count = 12): Promise<CGMEntry[]> {
-  const res = await fetch(`/api/nightscout/entries?url=${encodeURIComponent(nsUrl)}&secret=${encodeURIComponent(secret)}&count=${count}`);
-  const json = await res.json();
-  if (!json.success) return [];
-  return json.data || [];
-}
-
-/* ─────────────────────── Login Screen ─────────────────────── */
-
-function LoginScreen({ onLogin }: { onLogin: (auth: AuthState, config: AppConfig) => void }) {
+// ============================================================
+// Login Screen
+// ============================================================
+function LoginScreen({ onLogin }: { onLogin: (phone: string) => void }) {
   const [phone, setPhone] = useState('');
-  const [deviceUrl, setDeviceUrl] = useState('');
-  const [nightscoutUrl, setNightscoutUrl] = useState('');
-  const [apiSecret, setApiSecret] = useState('');
-  const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
-  const handleLogin = async () => {
-    if (!phone.trim()) { setError('请输入手机号'); return; }
-    if (!deviceUrl.trim()) { setError('请输入设备地址'); return; }
-
-    setLoading(true);
-    setError('');
-    try {
-      const { token } = await apiLogin(deviceUrl.trim(), phone.trim());
-      onLogin(
-        { token, phone: phone.trim() },
-        {
-          nightscoutUrl: nightscoutUrl.trim(),
-          apiSecret: apiSecret.trim(),
-          deviceUrl: deviceUrl.trim(),
-          deviceToken: token,
-        }
-      );
-    } catch (err) {
-      setError(err instanceof Error ? err.message : '登录失败');
-    } finally {
-      setLoading(false);
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const cleaned = phone.replace(/[\s\-()]/g, '');
+    if (!/^1[3-9]\d{9}$/.test(cleaned)) {
+      setError('请输入有效的手机号码');
+      return;
     }
+    onLogin(cleaned);
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center p-4 bg-gradient-to-b from-slate-950 to-slate-900">
-      <Card className="w-full max-w-md border-slate-700 bg-slate-900/80 backdrop-blur">
+    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-900 to-slate-800 p-4">
+      <Card className="w-full max-w-md border-slate-700 bg-slate-900/80">
         <CardHeader className="text-center">
-          <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-cyan-500/10 ring-1 ring-cyan-500/20">
-            <Shield className="h-8 w-8 text-cyan-400" />
+          <div className="mx-auto mb-4 w-16 h-16 rounded-full bg-cyan-500/20 flex items-center justify-center">
+            <Phone className="w-8 h-8 text-cyan-400" />
           </div>
           <CardTitle className="text-2xl text-white">AndroidAPS 远程控制</CardTitle>
-          <CardDescription className="text-slate-400">通过手机号登录，远程管理胰岛素输注</CardDescription>
+          <CardDescription className="text-slate-400">
+            输入手机号码登录，该号码将作为 AndroidAPS SMS 白名单
+          </CardDescription>
         </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="space-y-2">
-            <Label className="text-slate-300">手机号</Label>
-            <div className="relative">
-              <Phone className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
+        <CardContent>
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="phone" className="text-slate-300">手机号码</Label>
               <Input
-                className="pl-10 bg-slate-800 border-slate-700 text-white"
-                placeholder="请输入注册手机号"
+                id="phone"
+                type="tel"
+                placeholder="请输入手机号码"
                 value={phone}
-                onChange={e => setPhone(e.target.value)}
-                onKeyDown={e => e.key === 'Enter' && handleLogin()}
+                onChange={(e) => { setPhone(e.target.value); setError(''); }}
+                className="bg-slate-800 border-slate-600 text-white text-lg"
+                maxLength={13}
               />
+              {error && <p className="text-sm text-red-400">{error}</p>}
             </div>
+            <Button type="submit" className="w-full bg-cyan-600 hover:bg-cyan-700 text-white" size="lg">
+              登录
+            </Button>
+          </form>
+          <div className="mt-6 p-3 rounded-md bg-slate-800/50 border border-slate-700">
+            <p className="text-xs text-slate-400">
+              <AlertTriangle className="w-3 h-3 inline mr-1 text-amber-400" />
+              登录手机号需要在 AndroidAPS SMS Communicator 中添加到白名单，否则命令将被拒绝。
+            </p>
           </div>
-          <div className="space-y-2">
-            <Label className="text-slate-300">设备地址</Label>
-            <Input
-              className="bg-slate-800 border-slate-700 text-white"
-              placeholder="http://192.168.1.100:8080"
-              value={deviceUrl}
-              onChange={e => setDeviceUrl(e.target.value)}
-            />
-            <p className="text-xs text-slate-500">AndroidAPS HTTP API 服务地址</p>
-          </div>
-
-          <div className="border-t border-slate-700 pt-4">
-            <p className="text-xs text-slate-500 mb-3">Nightscout 配置（可选，用于查看数据）</p>
-            <div className="space-y-3">
-              <Input
-                className="bg-slate-800 border-slate-700 text-white text-sm"
-                placeholder="Nightscout URL（如 https://my.nightscout.site）"
-                value={nightscoutUrl}
-                onChange={e => setNightscoutUrl(e.target.value)}
-              />
-              <Input
-                className="bg-slate-800 border-slate-700 text-white text-sm"
-                type="password"
-                placeholder="API Secret"
-                value={apiSecret}
-                onChange={e => setApiSecret(e.target.value)}
-              />
-            </div>
-          </div>
-
-          {error && (
-            <div className="flex items-center gap-2 text-red-400 text-sm bg-red-500/10 rounded-lg p-3">
-              <XCircle className="h-4 w-4 shrink-0" /> {error}
-            </div>
-          )}
-
-          <Button
-            className="w-full bg-cyan-600 hover:bg-cyan-700 text-white"
-            onClick={handleLogin}
-            disabled={loading}
-          >
-            {loading ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> 登录中...</> : '登录'}
-          </Button>
         </CardContent>
       </Card>
     </div>
   );
 }
 
-/* ─────────────────────── Status Panel ─────────────────────── */
+// ============================================================
+// Setup Screen - Configure SMS Gateway & Nightscout
+// ============================================================
+function SetupScreen({
+  phoneNumber,
+  initialConfig,
+  onSave,
+  onSkip,
+}: {
+  phoneNumber: string;
+  initialConfig: AppConfig | null;
+  onSave: (config: AppConfig) => void;
+  onSkip: () => void;
+}) {
+  const [provider, setProvider] = useState<SMSGatewayConfig['provider']>(
+    initialConfig?.sms.provider || 'generic'
+  );
+  const [apiUrl, setApiUrl] = useState(initialConfig?.sms.apiUrl || '');
+  const [apiKey, setApiKey] = useState(initialConfig?.sms.apiKey || '');
+  const [apiSecret, setApiSecret] = useState(initialConfig?.sms.apiSecret || '');
+  const [fromNumber, setFromNumber] = useState(initialConfig?.sms.fromNumber || '');
+  const [signName, setSignName] = useState(initialConfig?.sms.signName || '');
+  const [templateCode, setTemplateCode] = useState(initialConfig?.sms.templateCode || '');
 
-function StatusPanel({ status, cgmEntries, onRefresh, refreshing }: {
-  status: NightscoutStatus | null;
-  cgmEntries: CGMEntry[];
+  const [nsUrl, setNsUrl] = useState(initialConfig?.nightscout.url || '');
+  const [nsSecret, setNsSecret] = useState(initialConfig?.nightscout.apiSecret || '');
+
+  const [testResult, setTestResult] = useState<{ ok: boolean; msg: string } | null>(null);
+  const [testing, setTesting] = useState(false);
+
+  const handleProviderChange = (value: string) => {
+    const p = value as SMSGatewayConfig['provider'];
+    setProvider(p);
+    const preset = SMS_PROVIDER_PRESETS.find((x) => x.provider === p);
+    if (preset) {
+      setApiUrl(preset.placeholder.apiUrl);
+      setApiKey(preset.placeholder.apiKey);
+      setApiSecret(preset.placeholder.apiSecret || '');
+      setSignName(preset.placeholder.signName || '');
+      setTemplateCode(preset.placeholder.templateCode || '');
+    }
+  };
+
+  const handleTest = async () => {
+    setTesting(true);
+    setTestResult(null);
+    try {
+      const res = await fetch('/api/nightscout/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ nightscoutUrl: nsUrl, apiSecret: nsSecret }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setTestResult({ ok: true, msg: 'Nightscout 连接成功' });
+      } else {
+        setTestResult({ ok: false, msg: data.error || '连接失败' });
+      }
+    } catch {
+      setTestResult({ ok: false, msg: '网络错误' });
+    }
+    setTesting(false);
+  };
+
+  const handleSave = () => {
+    const config: AppConfig = {
+      sms: {
+        provider,
+        apiUrl,
+        apiKey,
+        apiSecret: apiSecret || undefined,
+        fromNumber,
+        toNumber: phoneNumber,
+        signName: signName || undefined,
+        templateCode: templateCode || undefined,
+      },
+      nightscout: {
+        url: nsUrl,
+        apiSecret: nsSecret,
+      },
+    };
+    onSave(config);
+  };
+
+  const preset = SMS_PROVIDER_PRESETS.find((x) => x.provider === provider);
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-slate-900 to-slate-800 p-4">
+      <div className="max-w-2xl mx-auto space-y-6">
+        <div className="text-center">
+          <h1 className="text-2xl font-bold text-white">系统配置</h1>
+          <p className="text-slate-400 mt-1">
+            登录号码：<span className="text-cyan-400">{phoneNumber}</span>（将作为 AndroidAPS 白名单）
+          </p>
+        </div>
+
+        {/* SMS Gateway Config */}
+        <Card className="border-slate-700 bg-slate-900/80">
+          <CardHeader>
+            <CardTitle className="text-white flex items-center gap-2">
+              <Send className="w-5 h-5 text-cyan-400" />
+              SMS 网关配置
+            </CardTitle>
+            <CardDescription className="text-slate-400">
+              配置短信网关，用于向 AndroidAPS 手机发送输注命令
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="space-y-2">
+              <Label className="text-slate-300">短信服务商</Label>
+              <Select value={provider} onValueChange={handleProviderChange}>
+                <SelectTrigger className="bg-slate-800 border-slate-600 text-white">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {SMS_PROVIDER_PRESETS.map((p) => (
+                    <SelectItem key={p.provider} value={p.provider}>{p.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {preset?.helpText && (
+                <p className="text-xs text-slate-500 mt-1">{preset.helpText}</p>
+              )}
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label className="text-slate-300">API 地址</Label>
+                <Input value={apiUrl} onChange={(e) => setApiUrl(e.target.value)}
+                  placeholder={preset?.placeholder.apiUrl}
+                  className="bg-slate-800 border-slate-600 text-white" />
+              </div>
+              <div className="space-y-2">
+                <Label className="text-slate-300">API Key / ID</Label>
+                <Input value={apiKey} onChange={(e) => setApiKey(e.target.value)}
+                  placeholder={preset?.placeholder.apiKey}
+                  className="bg-slate-800 border-slate-600 text-white" />
+              </div>
+            </div>
+
+            {(provider === 'aliyun' || provider === 'tencent' || provider === 'twilio') && (
+              <div className="space-y-2">
+                <Label className="text-slate-300">API Secret / Token</Label>
+                <Input value={apiSecret} onChange={(e) => setApiSecret(e.target.value)}
+                  type="password" placeholder={preset?.placeholder.apiSecret}
+                  className="bg-slate-800 border-slate-600 text-white" />
+              </div>
+            )}
+
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label className="text-slate-300">发送方号码</Label>
+                <Input value={fromNumber} onChange={(e) => setFromNumber(e.target.value)}
+                  placeholder="网关分配的号码"
+                  className="bg-slate-800 border-slate-600 text-white" />
+              </div>
+              <div className="space-y-2">
+                <Label className="text-slate-300">接收方号码</Label>
+                <Input value={phoneNumber} disabled
+                  className="bg-slate-800/50 border-slate-600 text-slate-400" />
+                <p className="text-xs text-slate-500">自动使用登录手机号</p>
+              </div>
+            </div>
+
+            {(provider === 'aliyun' || provider === 'tencent') && (
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label className="text-slate-300">短信签名</Label>
+                  <Input value={signName} onChange={(e) => setSignName(e.target.value)}
+                    placeholder={preset?.placeholder.signName}
+                    className="bg-slate-800 border-slate-600 text-white" />
+                </div>
+                <div className="space-y-2">
+                  <Label className="text-slate-300">模板 ID</Label>
+                  <Input value={templateCode} onChange={(e) => setTemplateCode(e.target.value)}
+                    placeholder={preset?.placeholder.templateCode}
+                    className="bg-slate-800 border-slate-600 text-white" />
+                </div>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Nightscout Config */}
+        <Card className="border-slate-700 bg-slate-900/80">
+          <CardHeader>
+            <CardTitle className="text-white flex items-center gap-2">
+              <Activity className="w-5 h-5 text-green-400" />
+              Nightscout 配置
+            </CardTitle>
+            <CardDescription className="text-slate-400">
+              用于读取血糖、泵状态和治疗记录数据
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label className="text-slate-300">Nightscout URL</Label>
+                <Input value={nsUrl} onChange={(e) => setNsUrl(e.target.value)}
+                  placeholder="https://your-nightscout.herokuapp.com"
+                  className="bg-slate-800 border-slate-600 text-white" />
+              </div>
+              <div className="space-y-2">
+                <Label className="text-slate-300">API Secret</Label>
+                <Input value={nsSecret} onChange={(e) => setNsSecret(e.target.value)}
+                  type="password" placeholder="API Secret"
+                  className="bg-slate-800 border-slate-600 text-white" />
+              </div>
+            </div>
+            <div className="flex items-center gap-3">
+              <Button onClick={handleTest} variant="outline" disabled={testing || !nsUrl}
+                className="border-slate-600 text-slate-300">
+                {testing ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
+                测试连接
+              </Button>
+              {testResult && (
+                <span className={`text-sm ${testResult.ok ? 'text-green-400' : 'text-red-400'}`}>
+                  {testResult.ok ? <CheckCircle2 className="w-4 h-4 inline mr-1" /> : <XCircle className="w-4 h-4 inline mr-1" />}
+                  {testResult.msg}
+                </span>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+
+        <div className="flex gap-3">
+          <Button onClick={handleSave} className="flex-1 bg-cyan-600 hover:bg-cyan-700 text-white" size="lg">
+            保存配置
+          </Button>
+          <Button onClick={onSkip} variant="outline" className="border-slate-600 text-slate-300" size="lg">
+            稍后配置
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// Status Panel
+// ============================================================
+function StatusPanel({ status, cgm, onRefresh, refreshing }: {
+  status: DeviceStatus | null;
+  cgm: CGMEntry | null;
   onRefresh: () => void;
   refreshing: boolean;
 }) {
-  const latestCGM = cgmEntries[0];
-
-  const cgmColor = (sgv: number) => {
+  const getSGVColor = (sgv: number) => {
     if (sgv >= 70 && sgv <= 180) return 'text-green-400';
     if (sgv > 180 && sgv <= 250) return 'text-amber-400';
     return 'text-red-400';
   };
 
-  const cgmBg = (sgv: number) => {
-    if (sgv >= 70 && sgv <= 180) return 'bg-green-500/10 ring-green-500/20';
-    if (sgv > 180 && sgv <= 250) return 'bg-amber-500/10 ring-amber-500/20';
-    return 'bg-red-500/10 ring-red-500/20';
-  };
-
-  const directionArrow = (dir: string) => {
+  const getDirection = (dir: string) => {
     const map: Record<string, string> = {
-      'Flat': '→', 'FortyFiveUp': '↗', 'SingleUp': '↑', 'DoubleUp': '⇈',
-      'FortyFiveDown': '↘', 'SingleDown': '↓', 'DoubleDown': '⇊', 'NONE': '-',
+      Flat: '→', FortyFiveUp: '↗', FortyFiveDown: '↘',
+      SingleUp: '↑', SingleDown: '↓', DoubleUp: '⇈', DoubleDown: '⇊',
     };
-    return map[dir] || dir || '-';
+    return map[dir] || dir;
   };
 
   return (
-    <div className="space-y-4">
-      {/* CGM Card */}
-      <Card className="border-slate-700 bg-slate-900/60">
-        <CardHeader className="pb-2 flex flex-row items-center justify-between">
-          <CardTitle className="text-sm text-slate-400 flex items-center gap-2">
-            <Activity className="h-4 w-4" /> 当前血糖
-          </CardTitle>
-          <Button variant="ghost" size="icon" className="h-8 w-8" onClick={onRefresh} disabled={refreshing}>
-            <RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />
-          </Button>
-        </CardHeader>
-        <CardContent>
-          {latestCGM ? (
-            <div className="flex items-end gap-4">
-              <div className={`flex h-20 w-20 items-center justify-center rounded-2xl ring-1 ${cgmBg(latestCGM.sgv)}`}>
-                <span className={`text-3xl font-bold ${cgmColor(latestCGM.sgv)}`}>{latestCGM.sgv}</span>
-              </div>
-              <div className="space-y-1">
-                <span className="text-slate-500 text-sm">mg/dL</span>
-                <div className="text-2xl text-slate-300">{directionArrow(latestCGM.direction)}</div>
-                <span className="text-xs text-slate-500">
-                  {new Date(latestCGM.date).toLocaleTimeString('zh-CN')}
-                </span>
-              </div>
-            </div>
+    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+      <Card className="border-slate-700 bg-slate-900/80">
+        <CardContent className="pt-4 text-center">
+          <p className="text-xs text-slate-400 mb-1">当前血糖</p>
+          {cgm ? (
+            <>
+              <p className={`text-3xl font-bold ${getSGVColor(cgm.sgv)}`}>{cgm.sgv}</p>
+              <p className={`text-lg ${getSGVColor(cgm.sgv)}`}>{getDirection(cgm.direction)}</p>
+            </>
           ) : (
-            <p className="text-slate-500 text-sm">暂无 CGM 数据</p>
-          )}
-          {/* Mini chart */}
-          {cgmEntries.length > 1 && (
-            <div className="mt-4 flex items-end gap-1 h-16">
-              {cgmEntries.slice(0, 12).reverse().map((entry, i) => {
-                const maxSGV = 400;
-                const height = Math.max(4, (entry.sgv / maxSGV) * 100);
-                return (
-                  <div
-                    key={i}
-                    className={`flex-1 rounded-t ${entry.sgv >= 70 && entry.sgv <= 180 ? 'bg-green-500/40' : entry.sgv <= 250 ? 'bg-amber-500/40' : 'bg-red-500/40'}`}
-                    style={{ height: `${height}%` }}
-                    title={`${entry.sgv} mg/dL`}
-                  />
-                );
-              })}
-            </div>
+            <p className="text-2xl text-slate-500">--</p>
           )}
         </CardContent>
       </Card>
 
-      {/* Pump Status */}
-      <Card className="border-slate-700 bg-slate-900/60">
-        <CardHeader className="pb-2">
-          <CardTitle className="text-sm text-slate-400 flex items-center gap-2">
-            <Droplets className="h-4 w-4" /> 泵状态
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          {status ? (
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-1">
-                <span className="text-xs text-slate-500">储药器</span>
-                <div className="flex items-center gap-2">
-                  <Droplets className={`h-4 w-4 ${status.reservoir < 50 ? 'text-amber-400' : 'text-cyan-400'}`} />
-                  <span className="text-lg font-bold text-white">{status.reservoir}U</span>
-                </div>
-              </div>
-              <div className="space-y-1">
-                <span className="text-xs text-slate-500">电池</span>
-                <div className="flex items-center gap-2">
-                  <Battery className={`h-4 w-4 ${status.battery < 25 ? 'text-red-400' : 'text-green-400'}`} />
-                  <span className="text-lg font-bold text-white">{status.battery}%</span>
-                </div>
-              </div>
-              <div className="col-span-2 flex items-center gap-2">
-                <Badge variant={status.isBolusInProgress ? 'default' : 'secondary'}
-                  className={status.isBolusInProgress ? 'bg-cyan-600' : 'bg-slate-700 text-slate-300'}>
-                  {status.isBolusInProgress ? '输注中' : status.isSuspended ? '已暂停' : '正常'}
-                </Badge>
-                {status.pumpType && (
-                  <span className="text-xs text-slate-500">{status.pumpType}</span>
-                )}
-              </div>
-            </div>
+      <Card className="border-slate-700 bg-slate-900/80">
+        <CardContent className="pt-4 text-center">
+          <p className="text-xs text-slate-400 mb-1">储药器</p>
+          {status?.pump?.reservoir != null ? (
+            <p className={`text-3xl font-bold ${status.pump.reservoir < 20 ? 'text-red-400' : 'text-cyan-400'}`}>
+              {status.pump.reservoir}<span className="text-sm ml-1">U</span>
+            </p>
           ) : (
-            <p className="text-slate-500 text-sm">无法获取泵状态</p>
+            <p className="text-2xl text-slate-500">--</p>
           )}
         </CardContent>
       </Card>
+
+      <Card className="border-slate-700 bg-slate-900/80">
+        <CardContent className="pt-4 text-center">
+          <p className="text-xs text-slate-400 mb-1">活性胰岛素</p>
+          {status?.openaps?.iob?.iob != null ? (
+            <p className="text-3xl font-bold text-amber-400">
+              {status.openaps.iob.iob.toFixed(1)}<span className="text-sm ml-1">U</span>
+            </p>
+          ) : (
+            <p className="text-2xl text-slate-500">--</p>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card className="border-slate-700 bg-slate-900/80">
+        <CardContent className="pt-4 text-center">
+          <p className="text-xs text-slate-400 mb-1">泵电池</p>
+          {status?.pump?.battery?.percent != null ? (
+            <>
+              <Battery className={`w-8 h-8 mx-auto mb-1 ${status.pump.battery.percent < 25 ? 'text-red-400' : 'text-green-400'}`} />
+              <p className={`text-xl font-bold ${status.pump.battery.percent < 25 ? 'text-red-400' : 'text-green-400'}`}>
+                {status.pump.battery.percent}%
+              </p>
+            </>
+          ) : (
+            <p className="text-2xl text-slate-500">--</p>
+          )}
+        </CardContent>
+      </Card>
+
+      <div className="col-span-2 md:col-span-4 flex justify-end">
+        <Button variant="ghost" size="sm" onClick={onRefresh} disabled={refreshing}
+          className="text-slate-400">
+          <RefreshCw className={`w-4 h-4 mr-1 ${refreshing ? 'animate-spin' : ''}`} />
+          刷新数据
+        </Button>
+      </div>
     </div>
   );
 }
 
-/* ─────────────────────── Bolus / Carbs Form ─────────────────────── */
-
-function TreatmentForm({ auth, config, safetyLock, onCommandSent }: {
-  auth: AuthState;
-  config: AppConfig;
+// ============================================================
+// Bolus / Carbs Input
+// ============================================================
+function BolusCarbsPanel({
+  safetyLock,
+  onBolus,
+  onCarbs,
+  onMixed,
+  isSending,
+  lastResult,
+}: {
   safetyLock: ReturnType<typeof useSafetyLock>;
-  onCommandSent: (type: string, result: DirectAPICommandResult) => void;
+  onBolus: (amount: number) => void;
+  onCarbs: (amount: number) => void;
+  onMixed: (insulin: number, carbs: number) => void;
+  isSending: boolean;
+  lastResult: { success: boolean; error?: string } | null;
 }) {
-  const [insulinDose, setInsulinDose] = useState('');
-  const [carbsAmount, setCarbsAmount] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [confirmDialog, setConfirmDialog] = useState<{
-    open: boolean;
-    type: 'insulin' | 'carbs' | 'both';
-    insulin?: number;
-    carbs?: number;
-  }>({ open: false, type: 'insulin' });
-  const [error, setError] = useState('');
-  const [lastResult, setLastResult] = useState<DirectAPICommandResult | null>(null);
+  const [insulin, setInsulin] = useState('');
+  const [carbs, setCarbs] = useState('');
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [pendingAction, setPendingAction] = useState<{ type: string; i: number; c: number } | null>(null);
 
-  const insulinQuickDoses = [0.5, 1, 1.5, 2, 3, 5];
-  const carbsQuickAmounts = [5, 10, 15, 20, 30, 45];
+  const insulinNum = parseFloat(insulin) || 0;
+  const carbsNum = parseFloat(carbs) || 0;
 
-  const handleInsulinSubmit = () => {
-    const dose = parseFloat(insulinDose);
-    if (!dose || dose <= 0) { setError('请输入有效剂量'); return; }
-    if (dose > SAFETY_RULES.MAX_BOLUS_UNITS) { setError(`最大单次剂量 ${SAFETY_RULES.MAX_BOLUS_UNITS}U`); return; }
-    setError('');
-    setConfirmDialog({ open: true, type: 'insulin', insulin: dose });
+  const handleAction = (type: string, i: number, c: number) => {
+    if ((i > 0 && safetyLock.isInsulinLocked) || (c > 0 && safetyLock.isCarbsLocked)) return;
+    setPendingAction({ type, i, c });
+    setConfirmOpen(true);
   };
 
-  const handleCarbsSubmit = () => {
-    const amount = parseInt(carbsAmount);
-    if (!amount || amount <= 0) { setError('请输入有效碳水值'); return; }
-    if (amount > SAFETY_RULES.MAX_CARBS_GRAMS) { setError(`最大单次碳水 ${SAFETY_RULES.MAX_CARBS_GRAMS}g`); return; }
-    setError('');
-    setConfirmDialog({ open: true, type: 'carbs', carbs: amount });
+  const handleConfirm = () => {
+    if (!pendingAction) return;
+    if (pendingAction.type === 'bolus') onBolus(pendingAction.i);
+    else if (pendingAction.type === 'carbs') onCarbs(pendingAction.c);
+    else if (pendingAction.type === 'mixed') onMixed(pendingAction.i, pendingAction.c);
+    setConfirmOpen(false);
+    setPendingAction(null);
+    setInsulin('');
+    setCarbs('');
   };
 
-  const handleConfirm = async () => {
-    setConfirmDialog(prev => ({ ...prev, open: false }));
-    setLoading(true);
-    setError('');
-    setLastResult(null);
-
-    try {
-      if (confirmDialog.type === 'insulin' && confirmDialog.insulin) {
-        const result = await apiBolus(config.deviceUrl, auth.token, confirmDialog.insulin, auth.phone);
-        setLastResult(result);
-        safetyLock.recordBolus();
-        onCommandSent('insulin', result);
-        setInsulinDose('');
-      } else if (confirmDialog.type === 'carbs' && confirmDialog.carbs) {
-        const result = await apiCarbs(config.deviceUrl, auth.token, confirmDialog.carbs, auth.phone);
-        setLastResult(result);
-        safetyLock.recordCarbs();
-        onCommandSent('carbs', result);
-        setCarbsAmount('');
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : '操作失败');
-    } finally {
-      setLoading(false);
-    }
-  };
+  const bolusQuick = [0.5, 1, 1.5, 2, 3, 5];
+  const carbsQuick = [5, 10, 15, 20, 30, 45];
 
   return (
-    <div className="space-y-4">
-      {/* Safety Lock Banner */}
-      {(safetyLock.isInsulinLocked || safetyLock.isCarbsLocked) && (
-        <div className="flex items-center gap-3 rounded-lg bg-amber-500/10 border border-amber-500/20 p-3">
-          <Lock className="h-5 w-5 text-amber-400 shrink-0" />
-          <div className="text-sm">
+    <>
+      <div className="grid md:grid-cols-2 gap-4">
+        {/* Insulin */}
+        <Card className="border-slate-700 bg-slate-900/80">
+          <CardHeader>
+            <CardTitle className="text-white flex items-center gap-2 text-lg">
+              <Droplets className="w-5 h-5 text-amber-400" />
+              胰岛素输注
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
             {safetyLock.isInsulinLocked && (
-              <span className="text-amber-300">
-                胰岛素锁定中，{formatCountdown(safetyLock.insulinCountdown)}后可再次输注
-              </span>
+              <div className="flex items-center gap-2 p-2 rounded bg-red-500/10 border border-red-500/30">
+                <Lock className="w-4 h-4 text-red-400" />
+                <span className="text-sm text-red-400">
+                  锁定中 {Math.ceil(safetyLock.insulinCountdown / 60)}:{String(safetyLock.insulinCountdown % 60).padStart(2, '0')}
+                </span>
+              </div>
             )}
-            {safetyLock.isInsulinLocked && safetyLock.isCarbsLocked && <br />}
-            {safetyLock.isCarbsLocked && (
-              <span className="text-amber-300">
-                碳水锁定中，{formatCountdown(safetyLock.carbsCountdown)}后可再次记录
-              </span>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* Insulin Card */}
-      <Card className="border-slate-700 bg-slate-900/60">
-        <CardHeader className="pb-3">
-          <CardTitle className="text-sm text-amber-400 flex items-center gap-2">
-            <Droplets className="h-4 w-4" /> 胰岛素输注
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <div className="flex gap-2">
-            <Input
-              type="number"
-              step="0.1"
-              min="0"
-              max={SAFETY_RULES.MAX_BOLUS_UNITS}
-              placeholder="剂量 (U)"
-              value={insulinDose}
-              onChange={e => setInsulinDose(e.target.value)}
-              disabled={safetyLock.isInsulinLocked || loading}
-              className="bg-slate-800 border-slate-700 text-white text-lg"
-            />
-            <Button
-              className="bg-amber-600 hover:bg-amber-700 text-white shrink-0"
-              onClick={handleInsulinSubmit}
-              disabled={safetyLock.isInsulinLocked || loading || !insulinDose}
-            >
-              {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-            </Button>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            {insulinQuickDoses.map(dose => (
-              <Button
-                key={dose}
-                variant="outline"
-                size="sm"
-                className="border-slate-700 text-slate-300 hover:bg-amber-600/20 hover:text-amber-300"
-                onClick={() => setInsulinDose(dose.toString())}
-                disabled={safetyLock.isInsulinLocked || loading}
-              >
-                {dose}U
+            <div className="flex gap-2">
+              <Input type="number" placeholder="剂量 (U)" value={insulin}
+                onChange={(e) => setInsulin(e.target.value)} step="0.1" min="0" max={SAFETY_RULES.MAX_BOLUS_UNITS}
+                disabled={safetyLock.isInsulinLocked}
+                className="bg-slate-800 border-slate-600 text-white text-lg" />
+              <Button onClick={() => handleAction('bolus', insulinNum, 0)}
+                disabled={!insulinNum || safetyLock.isInsulinLocked || isSending}
+                className="bg-amber-600 hover:bg-amber-700 text-white">
+                {isSending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
               </Button>
-            ))}
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Carbs Card */}
-      <Card className="border-slate-700 bg-slate-900/60">
-        <CardHeader className="pb-3">
-          <CardTitle className="text-sm text-green-400 flex items-center gap-2">
-            <Activity className="h-4 w-4" /> 碳水记录
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <div className="flex gap-2">
-            <Input
-              type="number"
-              min="0"
-              max={SAFETY_RULES.MAX_CARBS_GRAMS}
-              placeholder="碳水 (g)"
-              value={carbsAmount}
-              onChange={e => setCarbsAmount(e.target.value)}
-              disabled={safetyLock.isCarbsLocked || loading}
-              className="bg-slate-800 border-slate-700 text-white text-lg"
-            />
-            <Button
-              className="bg-green-600 hover:bg-green-700 text-white shrink-0"
-              onClick={handleCarbsSubmit}
-              disabled={safetyLock.isCarbsLocked || loading || !carbsAmount}
-            >
-              {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-            </Button>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            {carbsQuickAmounts.map(amount => (
-              <Button
-                key={amount}
-                variant="outline"
-                size="sm"
-                className="border-slate-700 text-slate-300 hover:bg-green-600/20 hover:text-green-300"
-                onClick={() => setCarbsAmount(amount.toString())}
-                disabled={safetyLock.isCarbsLocked || loading}
-              >
-                {amount}g
-              </Button>
-            ))}
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Error */}
-      {error && (
-        <div className="flex items-center gap-2 text-red-400 text-sm bg-red-500/10 rounded-lg p-3">
-          <XCircle className="h-4 w-4 shrink-0" /> {error}
-        </div>
-      )}
-
-      {/* Last Result */}
-      {lastResult && (
-        <Card className={`border-slate-700 ${lastResult.success ? 'bg-green-500/5' : 'bg-red-500/5'}`}>
-          <CardContent className="pt-4">
-            <div className="flex items-center gap-2 mb-2">
-              {lastResult.success
-                ? <CheckCircle2 className="h-5 w-5 text-green-400" />
-                : <XCircle className="h-5 w-5 text-red-400" />}
-              <span className={`font-medium ${lastResult.success ? 'text-green-300' : 'text-red-300'}`}>
-                {lastResult.success ? '操作成功' : '操作失败'}
-              </span>
             </div>
-            <div className="text-sm text-slate-400 space-y-1">
-              {lastResult.requestedAmount !== undefined && (
-                <p>请求剂量: {lastResult.requestedAmount}U</p>
-              )}
-              {lastResult.deliveredAmount !== undefined && (
-                <p>实际输注: <span className="text-white font-medium">{lastResult.deliveredAmount}U</span></p>
-              )}
-              {lastResult.message && <p>备注: {lastResult.message}</p>}
-              <p>时间: {new Date(lastResult.createdAt).toLocaleString('zh-CN')}</p>
+            <div className="grid grid-cols-3 gap-2">
+              {bolusQuick.map((d) => (
+                <Button key={d} variant="outline" size="sm"
+                  onClick={() => handleAction('bolus', d, 0)}
+                  disabled={safetyLock.isInsulinLocked || isSending}
+                  className="border-slate-600 text-slate-300 hover:bg-amber-600/20">
+                  {d}U
+                </Button>
+              ))}
             </div>
           </CardContent>
         </Card>
+
+        {/* Carbs */}
+        <Card className="border-slate-700 bg-slate-900/80">
+          <CardHeader>
+            <CardTitle className="text-white flex items-center gap-2 text-lg">
+              <span className="text-lg">🍞</span>
+              碳水记录
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {safetyLock.isCarbsLocked && (
+              <div className="flex items-center gap-2 p-2 rounded bg-red-500/10 border border-red-500/30">
+                <Lock className="w-4 h-4 text-red-400" />
+                <span className="text-sm text-red-400">
+                  锁定中 {safetyLock.carbsCountdown}s
+                </span>
+              </div>
+            )}
+            <div className="flex gap-2">
+              <Input type="number" placeholder="碳水 (g)" value={carbs}
+                onChange={(e) => setCarbs(e.target.value)} min="0" max={SAFETY_RULES.MAX_CARBS_GRAMS}
+                disabled={safetyLock.isCarbsLocked}
+                className="bg-slate-800 border-slate-600 text-white text-lg" />
+              <Button onClick={() => handleAction('carbs', 0, carbsNum)}
+                disabled={!carbsNum || safetyLock.isCarbsLocked || isSending}
+                className="bg-green-600 hover:bg-green-700 text-white">
+                {isSending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+              </Button>
+            </div>
+            <div className="grid grid-cols-3 gap-2">
+              {carbsQuick.map((g) => (
+                <Button key={g} variant="outline" size="sm"
+                  onClick={() => handleAction('carbs', 0, g)}
+                  disabled={safetyLock.isCarbsLocked || isSending}
+                  className="border-slate-600 text-slate-300 hover:bg-green-600/20">
+                  {g}g
+                </Button>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Mixed bolus + carbs */}
+      {(insulinNum > 0 && carbsNum > 0) && (
+        <Button onClick={() => handleAction('mixed', insulinNum, carbsNum)}
+          disabled={safetyLock.isInsulinLocked || safetyLock.isCarbsLocked || isSending}
+          className="w-full bg-purple-600 hover:bg-purple-700 text-white">
+          混合输注：{insulinNum}U 胰岛素 + {carbsNum}g 碳水
+        </Button>
+      )}
+
+      {/* SMS Result */}
+      {lastResult && (
+        <div className={`p-3 rounded-md border ${lastResult.success ? 'bg-green-500/10 border-green-500/30' : 'bg-red-500/10 border-red-500/30'}`}>
+          <p className={`text-sm ${lastResult.success ? 'text-green-400' : 'text-red-400'}`}>
+            {lastResult.success ? '✓ 短信已发送，请等待 AndroidAPS 执行' : `✗ ${lastResult.error}`}
+          </p>
+        </div>
       )}
 
       {/* Confirm Dialog */}
-      <AlertDialog open={confirmDialog.open} onOpenChange={open => setConfirmDialog(prev => ({ ...prev, open: open }))}>
+      <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
         <AlertDialogContent className="bg-slate-900 border-slate-700">
           <AlertDialogHeader>
-            <AlertDialogTitle className="flex items-center gap-2 text-white">
-              <AlertTriangle className="h-5 w-5 text-amber-400" />
+            <AlertDialogTitle className="text-white flex items-center gap-2">
+              <AlertTriangle className="w-5 h-5 text-amber-400" />
               确认操作
             </AlertDialogTitle>
             <AlertDialogDescription className="text-slate-400">
-              {confirmDialog.type === 'insulin' && (
-                <>即将通过短信发送 <span className="text-amber-300 font-bold">{confirmDialog.insulin}U</span> 胰岛素到 AndroidAPS 手机。<br />请确认剂量正确。</>
-              )}
-              {confirmDialog.type === 'carbs' && (
-                <>即将记录 <span className="text-green-300 font-bold">{confirmDialog.carbs}g</span> 碳水。<br />请确认数值正确。</>
-              )}
+              {pendingAction?.type === 'bolus' && `将通过短信发送 BOLUS ${pendingAction.i}U 到 AndroidAPS`}
+              {pendingAction?.type === 'carbs' && `将通过短信发送 CARBS ${pendingAction.c}g 到 AndroidAPS`}
+              {pendingAction?.type === 'mixed' && `将通过短信发送 BOLUS ${pendingAction.i}U + CARBS ${pendingAction.c}g 到 AndroidAPS`}
+              <br /><br />
+              <span className="text-amber-400">请确认操作正确！短信发送后无法撤回。</span>
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel className="border-slate-700 text-slate-300">取消</AlertDialogCancel>
-            <AlertDialogAction
-              className={confirmDialog.type === 'insulin' ? 'bg-amber-600 hover:bg-amber-700' : 'bg-green-600 hover:bg-green-700'}
-              onClick={handleConfirm}
-            >
+            <AlertDialogCancel className="border-slate-600 text-slate-300">取消</AlertDialogCancel>
+            <AlertDialogAction onClick={handleConfirm} className="bg-cyan-600 hover:bg-cyan-700 text-white">
               确认发送
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </div>
+    </>
   );
 }
 
-/* ─────────────────────── Treatment History ─────────────────────── */
-
+// ============================================================
+// Treatment History
+// ============================================================
 function TreatmentHistory({ treatments }: { treatments: TreatmentRecord[] }) {
-  if (treatments.length === 0) {
-    return <p className="text-slate-500 text-sm text-center py-8">暂无治疗记录</p>;
+  if (!treatments.length) {
+    return (
+      <Card className="border-slate-700 bg-slate-900/80">
+        <CardContent className="pt-6 text-center text-slate-500">暂无治疗记录</CardContent>
+      </Card>
+    );
   }
 
   return (
-    <div className="space-y-2 max-h-96 overflow-y-auto">
-      {treatments.map(t => (
-        <div key={t._id} className="flex items-center justify-between rounded-lg bg-slate-800/50 border border-slate-700/50 p-3">
-          <div className="flex items-center gap-3">
-            {t.insulin ? (
-              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-amber-500/10">
-                <Droplets className="h-4 w-4 text-amber-400" />
-              </div>
-            ) : (
-              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-green-500/10">
-                <Activity className="h-4 w-4 text-green-400" />
-              </div>
-            )}
-            <div>
-              <p className="text-sm text-white">
-                {t.insulin ? `${t.insulin}U 胰岛素` : ''}
-                {t.insulin && t.carbs ? ' + ' : ''}
-                {t.carbs ? `${t.carbs}g 碳水` : ''}
-              </p>
-              <p className="text-xs text-slate-500">
-                {new Date(t.created_at).toLocaleString('zh-CN')}
-              </p>
-            </div>
-          </div>
-          {t.notes && <span className="text-xs text-slate-500">{t.notes}</span>}
-        </div>
-      ))}
-    </div>
-  );
-}
-
-/* ─────────────────────── Settings Panel ─────────────────────── */
-
-function SettingsPanel({ config, onSave, onDisconnect }: {
-  config: AppConfig;
-  onSave: (config: AppConfig) => void;
-  onDisconnect: () => void;
-}) {
-  const [nsUrl, setNsUrl] = useState(config.nightscoutUrl);
-  const [secret, setSecret] = useState(config.apiSecret);
-  const [deviceUrl, setDeviceUrl] = useState(config.deviceUrl);
-
-  return (
-    <Card className="border-slate-700 bg-slate-900/60">
+    <Card className="border-slate-700 bg-slate-900/80">
       <CardHeader>
-        <CardTitle className="text-sm text-slate-300 flex items-center gap-2">
-          <Settings className="h-4 w-4" /> 系统配置
-        </CardTitle>
+        <CardTitle className="text-white">治疗记录</CardTitle>
+        <CardDescription className="text-slate-400">最近 20 条记录（来自 Nightscout）</CardDescription>
       </CardHeader>
-      <CardContent className="space-y-4">
+      <CardContent>
         <div className="space-y-2">
-          <Label className="text-slate-400 text-xs">Nightscout URL</Label>
-          <Input className="bg-slate-800 border-slate-700 text-white text-sm" value={nsUrl} onChange={e => setNsUrl(e.target.value)} />
-        </div>
-        <div className="space-y-2">
-          <Label className="text-slate-400 text-xs">API Secret</Label>
-          <Input className="bg-slate-800 border-slate-700 text-white text-sm" type="password" value={secret} onChange={e => setSecret(e.target.value)} />
-        </div>
-        <div className="space-y-2">
-          <Label className="text-slate-400 text-xs">设备地址</Label>
-          <Input className="bg-slate-800 border-slate-700 text-white text-sm" value={deviceUrl} onChange={e => setDeviceUrl(e.target.value)} />
-        </div>
-        <div className="flex gap-2">
-          <Button className="flex-1 bg-cyan-600 hover:bg-cyan-700 text-white text-sm"
-            onClick={() => onSave({ ...config, nightscoutUrl: nsUrl, apiSecret: secret, deviceUrl })}>
-            保存配置
-          </Button>
-          <Button variant="outline" className="border-red-700 text-red-400 hover:bg-red-500/10 text-sm"
-            onClick={onDisconnect}>
-            <LogOut className="h-4 w-4 mr-1" /> 退出
-          </Button>
+          {treatments.map((t) => (
+            <div key={t._id} className="flex items-center justify-between p-3 rounded-md bg-slate-800/50 border border-slate-700">
+              <div>
+                <div className="flex items-center gap-2">
+                  {t.insulin ? <Badge variant="default" className="bg-amber-600">{t.insulin}U</Badge> : null}
+                  {t.carbs ? <Badge variant="default" className="bg-green-600">{t.carbs}g</Badge> : null}
+                  <span className="text-xs text-slate-500">{t.eventType}</span>
+                </div>
+                {t.notes && <p className="text-xs text-slate-400 mt-1">{t.notes}</p>}
+              </div>
+              <div className="text-right">
+                <p className="text-xs text-slate-400">
+                  {new Date(t.created_at).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}
+                </p>
+                <p className="text-xs text-slate-500">{t.enteredBy}</p>
+              </div>
+            </div>
+          ))}
         </div>
       </CardContent>
     </Card>
   );
 }
 
-/* ─────────────────────── Dashboard ─────────────────────── */
-
-function Dashboard({ auth, config, onDisconnect }: {
-  auth: AuthState;
-  config: AppConfig;
-  onDisconnect: () => void;
+// ============================================================
+// Dashboard
+// ============================================================
+function Dashboard({
+  session,
+  config,
+  onLogout,
+  onOpenSettings,
+}: {
+  session: UserSession;
+  config: AppConfig | null;
+  onLogout: () => void;
+  onOpenSettings: () => void;
 }) {
-  const safetyLock = useSafetyLock();
-  const [status, setStatus] = useState<NightscoutStatus | null>(null);
-  const [cgmEntries, setCGMEntries] = useState<CGMEntry[]>([]);
   const [treatments, setTreatments] = useState<TreatmentRecord[]>([]);
-  const [refreshing, setRefreshing] = useState(false);
-  const [showSettings, setShowSettings] = useState(false);
-  const [currentConfig, setCurrentConfig] = useState(config);
+  const [cgmEntries, setCGMEntries] = useState<CGMEntry[]>([]);
+  const [deviceStatus, setDeviceStatus] = useState<DeviceStatus | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [activeTab, setActiveTab] = useState('control');
 
-  const refreshData = useCallback(async () => {
-    setRefreshing(true);
+  const safetyLock = useSafetyLock();
+  const smsCmd = useSMSCommand(config?.sms || null);
+
+  const nsUrl = config?.nightscout.url || '';
+  const nsSecret = config?.nightscout.apiSecret || '';
+
+  const fetchData = useCallback(async () => {
+    if (!nsUrl || !nsSecret) return;
+    setLoading(true);
     try {
-      // Fetch status from device
-      const statusData = await apiStatus(currentConfig.deviceUrl, auth.token);
-      setStatus(statusData);
-    } catch { /* ignore */ }
-
-    if (currentConfig.nightscoutUrl && currentConfig.apiSecret) {
-      try {
-        const [entries, treats] = await Promise.all([
-          fetchNSEntries(currentConfig.nightscoutUrl, currentConfig.apiSecret),
-          fetchNSTreatments(currentConfig.nightscoutUrl, currentConfig.apiSecret),
-        ]);
-        setCGMEntries(entries);
-        setTreatments(treats);
-      } catch { /* ignore */ }
+      const [tRes, sRes, cRes] = await Promise.all([
+        fetch(`/api/nightscout/treatments?url=${encodeURIComponent(nsUrl)}&secret=${encodeURIComponent(nsSecret)}&count=20`),
+        fetch(`/api/nightscout/status?url=${encodeURIComponent(nsUrl)}&secret=${encodeURIComponent(nsSecret)}`),
+        fetch(`/api/nightscout/entries?url=${encodeURIComponent(nsUrl)}&secret=${encodeURIComponent(nsSecret)}`),
+      ]);
+      const tData = await tRes.json();
+      const sData = await sRes.json();
+      const cData = await cRes.json();
+      if (tData.success) setTreatments(tData.data);
+      if (sData.success) setDeviceStatus(sData.data);
+      if (cData.success) setCGMEntries(cData.data);
+    } catch (err) {
+      console.error('Failed to fetch data:', err);
     }
-    setRefreshing(false);
-  }, [currentConfig, auth.token]);
+    setLoading(false);
+  }, [nsUrl, nsSecret]);
 
   useEffect(() => {
-    refreshData();
-    const interval = setInterval(refreshData, 60000);
+    fetchData();
+    const interval = setInterval(fetchData, 60000);
     return () => clearInterval(interval);
-  }, [refreshData]);
+  }, [fetchData]);
+
+  const handleBolus = async (amount: number) => {
+    const result = await smsCmd.sendCommand('bolus', { insulin: amount });
+    if (result.success) safetyLock.recordBolus();
+  };
+
+  const handleCarbs = async (amount: number) => {
+    const result = await smsCmd.sendCommand('carbs', { carbs: amount });
+    if (result.success) safetyLock.recordCarbs();
+  };
+
+  const handleMixed = async (insulin: number, carbs: number) => {
+    // Send two separate SMS commands
+    const r1 = await smsCmd.sendCommand('bolus', { insulin });
+    if (r1.success) {
+      safetyLock.recordBolus();
+      await smsCmd.sendCommand('carbs', { carbs });
+      safetyLock.recordCarbs();
+    }
+  };
+
+  const latestCGM = cgmEntries.length > 0 ? cgmEntries[0] : null;
 
   return (
-    <div className="min-h-screen bg-gradient-to-b from-slate-950 to-slate-900">
-      {/* Header */}
-      <header className="sticky top-0 z-50 border-b border-slate-800 bg-slate-950/90 backdrop-blur">
-        <div className="mx-auto flex h-14 max-w-2xl items-center justify-between px-4">
-          <div className="flex items-center gap-2">
-            <Shield className="h-5 w-5 text-cyan-400" />
-            <span className="font-semibold text-white text-sm">AAPS Remote</span>
-            <Badge variant="secondary" className="bg-slate-800 text-slate-400 text-xs ml-1">
-              {auth.phone}
-            </Badge>
+    <div className="min-h-screen bg-gradient-to-br from-slate-900 to-slate-800 p-4">
+      <div className="max-w-4xl mx-auto space-y-4">
+        {/* Header */}
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-xl font-bold text-white">AndroidAPS 远程控制</h1>
+            <p className="text-sm text-slate-400">
+              <Phone className="w-3 h-3 inline mr-1" />
+              {session.phoneNumber}
+              <span className="ml-2 text-xs text-slate-500">
+                SMS 命令 → AndroidAPS
+              </span>
+            </p>
           </div>
-          <div className="flex items-center gap-1">
-            <Button variant="ghost" size="icon" className="h-8 w-8 text-slate-400" onClick={() => setShowSettings(!showSettings)}>
-              <Settings className="h-4 w-4" />
+          <div className="flex gap-2">
+            <Button variant="ghost" size="sm" onClick={onOpenSettings} className="text-slate-400">
+              <Settings className="w-4 h-4 mr-1" /> 配置
             </Button>
-            <Button variant="ghost" size="icon" className="h-8 w-8 text-slate-400" onClick={refreshData} disabled={refreshing}>
-              <RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />
+            <Button variant="ghost" size="sm" onClick={onLogout} className="text-slate-400">
+              <LogOut className="w-4 h-4 mr-1" /> 退出
             </Button>
           </div>
         </div>
-      </header>
-
-      <main className="mx-auto max-w-2xl px-4 py-4 space-y-4">
-        {/* Settings Panel (collapsible) */}
-        {showSettings && (
-          <SettingsPanel
-            config={currentConfig}
-            onSave={(newConfig) => { setCurrentConfig(newConfig); setShowSettings(false); }}
-            onDisconnect={onDisconnect}
-          />
-        )}
 
         {/* Safety Lock Banner */}
         {(safetyLock.isInsulinLocked || safetyLock.isCarbsLocked) && (
-          <div className="flex items-center gap-3 rounded-lg bg-amber-500/10 border border-amber-500/20 p-3">
-            <Lock className="h-5 w-5 text-amber-400 shrink-0" />
-            <div className="text-sm text-amber-300">
-              {safetyLock.isInsulinLocked && <>胰岛素锁定 {formatCountdown(safetyLock.insulinCountdown)} &nbsp;</>}
-              {safetyLock.isCarbsLocked && <>碳水锁定 {formatCountdown(safetyLock.carbsCountdown)}</>}
-            </div>
+          <div className="p-3 rounded-md bg-amber-500/10 border border-amber-500/30 flex items-center gap-2">
+            <Lock className="w-4 h-4 text-amber-400" />
+            <span className="text-sm text-amber-400">
+              {safetyLock.isInsulinLocked && `胰岛素锁定 ${Math.ceil(safetyLock.insulinCountdown / 60)}:${String(safetyLock.insulinCountdown % 60).padStart(2, '0')} `}
+              {safetyLock.isCarbsLocked && `碳水锁定 ${safetyLock.carbsCountdown}s`}
+            </span>
           </div>
         )}
 
-        <Tabs defaultValue="control" className="space-y-4">
-          <TabsList className="w-full bg-slate-800/50 border border-slate-700">
-            <TabsTrigger value="control" className="flex-1 text-sm">
-              <Send className="h-3.5 w-3.5 mr-1.5" /> 输注控制
-            </TabsTrigger>
-            <TabsTrigger value="status" className="flex-1 text-sm">
-              <Activity className="h-3.5 w-3.5 mr-1.5" /> 状态数据
-            </TabsTrigger>
-            <TabsTrigger value="history" className="flex-1 text-sm">
-              <Clock className="h-3.5 w-3.5 mr-1.5" /> 治疗记录
-            </TabsTrigger>
+        {/* Status Panel */}
+        <StatusPanel status={deviceStatus} cgm={latestCGM} onRefresh={fetchData} refreshing={loading} />
+
+        {/* Tabs */}
+        <Tabs value={activeTab} onValueChange={setActiveTab}>
+          <TabsList className="bg-slate-800 border border-slate-700">
+            <TabsTrigger value="control" className="text-slate-300">输注控制</TabsTrigger>
+            <TabsTrigger value="history" className="text-slate-300">治疗记录</TabsTrigger>
           </TabsList>
 
-          <TabsContent value="control">
-            <TreatmentForm
-              auth={auth}
-              config={currentConfig}
+          <TabsContent value="control" className="mt-4">
+            <BolusCarbsPanel
               safetyLock={safetyLock}
-              onCommandSent={() => refreshData()}
+              onBolus={handleBolus}
+              onCarbs={handleCarbs}
+              onMixed={handleMixed}
+              isSending={smsCmd.isSending}
+              lastResult={smsCmd.lastResult}
             />
           </TabsContent>
 
-          <TabsContent value="status">
-            <StatusPanel
-              status={status}
-              cgmEntries={cgmEntries}
-              onRefresh={refreshData}
-              refreshing={refreshing}
-            />
-          </TabsContent>
-
-          <TabsContent value="history">
-            <Card className="border-slate-700 bg-slate-900/60">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm text-slate-400 flex items-center gap-2">
-                  <BarChart3 className="h-4 w-4" /> 最近治疗记录
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <TreatmentHistory treatments={treatments} />
-              </CardContent>
-            </Card>
+          <TabsContent value="history" className="mt-4">
+            <TreatmentHistory treatments={treatments} />
           </TabsContent>
         </Tabs>
-      </main>
+
+        {!config && (
+          <div className="p-4 rounded-md bg-amber-500/10 border border-amber-500/30 text-center">
+            <p className="text-amber-400 text-sm">
+              <AlertTriangle className="w-4 h-4 inline mr-1" />
+              请先完成 SMS 网关和 Nightscout 配置
+              <Button variant="link" className="text-amber-400 underline ml-1" onClick={onOpenSettings}>
+                前往配置
+              </Button>
+            </p>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
 
-/* ─────────────────────── Home ─────────────────────── */
-
+// ============================================================
+// Home
+// ============================================================
 export default function Home() {
-  const [auth, setAuth] = useState<AuthState | null>(null);
+  const [session, setSession] = useState<UserSession | null>(null);
   const [config, setConfig] = useState<AppConfig | null>(null);
+  const [showSetup, setShowSetup] = useState(false);
 
-  const handleLogin = (authState: AuthState, appConfig: AppConfig) => {
-    setAuth(authState);
-    setConfig(appConfig);
+  useEffect(() => {
+    const savedSession = localStorage.getItem('aaps_session');
+    const savedConfig = localStorage.getItem('aaps_config');
+    if (savedSession) {
+      setSession(JSON.parse(savedSession));
+    }
+    if (savedConfig) {
+      setConfig(JSON.parse(savedConfig));
+    }
+  }, []);
+
+  const handleLogin = (phone: string) => {
+    const s: UserSession = { phoneNumber: phone, loggedInAt: Date.now() };
+    setSession(s);
+    localStorage.setItem('aaps_session', JSON.stringify(s));
+    // Check if config exists for this phone
+    const savedConfig = localStorage.getItem('aaps_config');
+    if (!savedConfig) {
+      setShowSetup(true);
+    }
   };
 
-  const handleDisconnect = () => {
-    setAuth(null);
+  const handleLogout = () => {
+    setSession(null);
     setConfig(null);
+    setShowSetup(false);
+    localStorage.removeItem('aaps_session');
+    localStorage.removeItem('aaps_config');
   };
 
-  if (!auth || !config) {
+  const handleSaveConfig = (c: AppConfig) => {
+    setConfig(c);
+    localStorage.setItem('aaps_config', JSON.stringify(c));
+    setShowSetup(false);
+  };
+
+  if (!session) {
     return <LoginScreen onLogin={handleLogin} />;
   }
 
-  return <Dashboard auth={auth} config={config} onDisconnect={handleDisconnect} />;
+  if (showSetup || !config) {
+    return (
+      <SetupScreen
+        phoneNumber={session.phoneNumber}
+        initialConfig={config}
+        onSave={handleSaveConfig}
+        onSkip={() => setShowSetup(false)}
+      />
+    );
+  }
+
+  return (
+    <Dashboard
+      session={session}
+      config={config}
+      onLogout={handleLogout}
+      onOpenSettings={() => setShowSetup(true)}
+    />
+  );
 }

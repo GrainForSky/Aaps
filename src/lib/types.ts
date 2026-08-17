@@ -1,49 +1,52 @@
-export type ConnectionMode = 'nightscout' | 'direct' | 'sms';
+// ============================================================
+// AndroidAPS Remote Control - Type Definitions
+// Architecture: SMS Gateway (commands) + Nightscout (data)
+// ============================================================
 
-export type DataSourceMode = 'nightscout' | 'direct';
-
-export interface NightscoutConfig {
-  mode: 'nightscout';
-  url: string;
-  apiSecret: string;
+// --- User & Auth ---
+export interface UserSession {
+  phoneNumber: string;
+  loggedInAt: number;
 }
 
-export interface DirectAPIConfig {
-  mode: 'direct';
-  url: string;
-  token?: string;
-}
-
+// --- Configuration ---
 export interface SMSGatewayConfig {
   provider: 'generic' | 'twilio' | 'aliyun' | 'tencent';
   apiUrl: string;
   apiKey: string;
   apiSecret?: string;
-  fromNumber?: string;
+  /** 发送方号码（SMS 网关分配的号码） */
+  fromNumber: string;
+  /** 接收方号码（AndroidAPS 手机号，默认=登录手机号） */
   toNumber: string;
+  /** 短信签名（阿里云/腾讯云需要） */
   signName?: string;
+  /** 短信模板 ID（阿里云/腾讯云需要） */
   templateCode?: string;
 }
 
-export interface SMSConnectionConfig {
-  mode: 'sms';
-  gateway: SMSGatewayConfig;
-  dataSource: {
-    mode: DataSourceMode;
-    nightscout?: { url: string; apiSecret: string };
-    direct?: { url: string; token?: string };
-  };
+export interface NightscoutConfig {
+  url: string;
+  apiSecret: string;
 }
 
-export type AppConfig = NightscoutConfig | DirectAPIConfig | SMSConnectionConfig;
-
-export interface Treatment {
-  type: 'insulin' | 'carbs' | 'both';
-  insulin?: number;
-  carbs?: number;
-  notes?: string;
+export interface AppConfig {
+  sms: SMSGatewayConfig;
+  nightscout: NightscoutConfig;
 }
 
+// --- SMS Command Format (AndroidAPS SMS Communicator) ---
+export type SMSCommandType = 'bolus' | 'carbs' | 'status' | 'suspend' | 'resume' | 'target';
+
+export interface SMSCommand {
+  type: SMSCommandType;
+  /** 格式化后的 SMS 文本，如 "BOLUS 2.5" */
+  text: string;
+  /** 人类可读描述 */
+  description: string;
+}
+
+// --- Nightscout Data Types ---
 export interface TreatmentRecord {
   _id: string;
   created_at: string;
@@ -92,6 +95,7 @@ export interface DeviceStatus {
   };
 }
 
+// --- Safety Lock ---
 export interface SafetyLock {
   insulinLockedUntil: number | null;
   carbsLockedUntil: number | null;
@@ -106,42 +110,74 @@ export const SAFETY_RULES = {
   MAX_CARBS_GRAMS: 150,
 } as const;
 
-// Direct API command result types
-export type CommandStatus = 'pending' | 'executing' | 'completed' | 'failed' | 'timeout';
-
-export interface DirectAPICommandResponse {
-  status: 'accepted';
-  requestId: string;
-  type: 'bolus' | 'carbs' | 'treatment';
-  insulin?: number;
-  carbs?: number;
-  message: string;
-  resultUrl: string;
-}
-
-export interface DirectAPICommandResult {
-  requestId: string;
-  type: 'bolus' | 'carbs' | 'treatment';
-  status: CommandStatus;
-  requestedAmount: number;
-  deliveredAmount: number;
+// --- SMS Send Result ---
+export interface SMSSendResult {
   success: boolean;
-  message: string;
-  createdAt: number;
-  completedAt?: number;
+  messageId?: string;
+  error?: string;
 }
 
-// Retry configuration
-export interface RetryConfig {
-  maxRetries: number;
-  retryDelayMs: number;
-  timeoutMs: number;
-  pollIntervalMs: number;
+// --- SMS Provider Presets ---
+export interface SMSProviderPreset {
+  name: string;
+  provider: SMSGatewayConfig['provider'];
+  apiUrl: string;
+  placeholder: {
+    apiUrl: string;
+    apiKey: string;
+    apiSecret?: string;
+    signName?: string;
+    templateCode?: string;
+  };
+  helpText: string;
 }
 
-export const DEFAULT_RETRY_CONFIG: RetryConfig = {
-  maxRetries: 2,
-  retryDelayMs: 3000,
-  timeoutMs: 30000,
-  pollIntervalMs: 2000,
-};
+export const SMS_PROVIDER_PRESETS: SMSProviderPreset[] = [
+  {
+    name: '阿里云短信',
+    provider: 'aliyun',
+    apiUrl: 'https://dysmsapi.aliyuncs.com',
+    placeholder: {
+      apiUrl: 'https://dysmsapi.aliyuncs.com',
+      apiKey: 'AccessKeyId',
+      apiSecret: 'AccessKeySecret',
+      signName: '短信签名',
+      templateCode: 'SMS_XXXXXX',
+    },
+    helpText: '需要开通阿里云短信服务，创建签名和模板。模板变量需包含 ${content}。',
+  },
+  {
+    name: '腾讯云短信',
+    provider: 'tencent',
+    apiUrl: 'https://sms.tencentcloudapi.com',
+    placeholder: {
+      apiUrl: 'https://sms.tencentcloudapi.com',
+      apiKey: 'SecretId',
+      apiSecret: 'SecretKey',
+      signName: '短信签名',
+      templateCode: '模板 ID',
+    },
+    helpText: '需要开通腾讯云短信服务，创建签名和模板。',
+  },
+  {
+    name: 'Twilio',
+    provider: 'twilio',
+    apiUrl: 'https://api.twilio.com/2010-04-01/Accounts/{AccountSid}/Messages.json',
+    placeholder: {
+      apiUrl: 'https://api.twilio.com/2010-04-01/Accounts/ACxxxx/Messages.json',
+      apiKey: 'Account SID',
+      apiSecret: 'Auth Token',
+    },
+    helpText: 'Twilio 可直接发送短信内容，无需模板。apiUrl 中需替换 AccountSid。',
+  },
+  {
+    name: '通用 HTTP 网关',
+    provider: 'generic',
+    apiUrl: '',
+    placeholder: {
+      apiUrl: 'https://your-sms-gateway.com/send',
+      apiKey: 'API Key',
+    },
+    helpText: '自定义 HTTP 网关，POST 请求需包含 to 和 message 参数。',
+  },
+];
