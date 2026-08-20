@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import {
   Card,
   CardContent,
@@ -13,13 +13,6 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -44,20 +37,21 @@ import {
   Phone,
   AlertTriangle,
   Lock,
+  Wifi,
+  WifiOff,
+  Smartphone,
 } from 'lucide-react';
 import type {
   UserSession,
   AppConfig,
-  SMSGatewayConfig,
   NightscoutConfig,
   TreatmentRecord,
   CGMEntry,
   DeviceStatus,
-  SafetyLock,
 } from '@/lib/types';
-import { SAFETY_RULES, SMS_PROVIDER_PRESETS } from '@/lib/types';
+import { SAFETY_RULES } from '@/lib/types';
 import { useSafetyLock } from '@/hooks/use-safety-lock';
-import { useSMSCommand } from '@/hooks/use-sms-command';
+import { useRemoteCommand } from '@/hooks/use-remote-command';
 
 // ============================================================
 // Login Screen
@@ -85,7 +79,7 @@ function LoginScreen({ onLogin }: { onLogin: (phone: string) => void }) {
           </div>
           <CardTitle className="text-2xl text-white">AndroidAPS 远程控制</CardTitle>
           <CardDescription className="text-slate-400">
-            输入手机号码登录，该号码将作为 AndroidAPS SMS 白名单
+            输入手机号码登录，远程管理胰岛素和碳水输注
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -110,7 +104,7 @@ function LoginScreen({ onLogin }: { onLogin: (phone: string) => void }) {
           <div className="mt-6 p-3 rounded-md bg-slate-800/50 border border-slate-700">
             <p className="text-xs text-slate-400">
               <AlertTriangle className="w-3 h-3 inline mr-1 text-amber-400" />
-              登录手机号需要在 AndroidAPS SMS Communicator 中添加到白名单，否则命令将被拒绝。
+              登录手机号需与 AndroidAPS 手机上注册的号码一致。
             </p>
           </div>
         </CardContent>
@@ -120,7 +114,7 @@ function LoginScreen({ onLogin }: { onLogin: (phone: string) => void }) {
 }
 
 // ============================================================
-// Setup Screen - Configure SMS Gateway & Nightscout
+// Setup Screen - Configure Nightscout
 // ============================================================
 function SetupScreen({
   phoneNumber,
@@ -133,34 +127,10 @@ function SetupScreen({
   onSave: (config: AppConfig) => void;
   onSkip: () => void;
 }) {
-  const [provider, setProvider] = useState<SMSGatewayConfig['provider']>(
-    initialConfig?.sms.provider || 'generic'
-  );
-  const [apiUrl, setApiUrl] = useState(initialConfig?.sms.apiUrl || '');
-  const [apiKey, setApiKey] = useState(initialConfig?.sms.apiKey || '');
-  const [apiSecret, setApiSecret] = useState(initialConfig?.sms.apiSecret || '');
-  const [fromNumber, setFromNumber] = useState(initialConfig?.sms.fromNumber || '');
-  const [signName, setSignName] = useState(initialConfig?.sms.signName || '');
-  const [templateCode, setTemplateCode] = useState(initialConfig?.sms.templateCode || '');
-
   const [nsUrl, setNsUrl] = useState(initialConfig?.nightscout.url || '');
   const [nsSecret, setNsSecret] = useState(initialConfig?.nightscout.apiSecret || '');
-
   const [testResult, setTestResult] = useState<{ ok: boolean; msg: string } | null>(null);
   const [testing, setTesting] = useState(false);
-
-  const handleProviderChange = (value: string) => {
-    const p = value as SMSGatewayConfig['provider'];
-    setProvider(p);
-    const preset = SMS_PROVIDER_PRESETS.find((x) => x.provider === p);
-    if (preset) {
-      setApiUrl(preset.placeholder.apiUrl);
-      setApiKey(preset.placeholder.apiKey);
-      setApiSecret(preset.placeholder.apiSecret || '');
-      setSignName(preset.placeholder.signName || '');
-      setTemplateCode(preset.placeholder.templateCode || '');
-    }
-  };
 
   const handleTest = async () => {
     setTesting(true);
@@ -185,25 +155,10 @@ function SetupScreen({
 
   const handleSave = () => {
     const config: AppConfig = {
-      sms: {
-        provider,
-        apiUrl,
-        apiKey,
-        apiSecret: apiSecret || undefined,
-        fromNumber,
-        toNumber: phoneNumber,
-        signName: signName || undefined,
-        templateCode: templateCode || undefined,
-      },
-      nightscout: {
-        url: nsUrl,
-        apiSecret: nsSecret,
-      },
+      nightscout: { url: nsUrl, apiSecret: nsSecret },
     };
     onSave(config);
   };
-
-  const preset = SMS_PROVIDER_PRESETS.find((x) => x.provider === provider);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 to-slate-800 p-4">
@@ -211,96 +166,9 @@ function SetupScreen({
         <div className="text-center">
           <h1 className="text-2xl font-bold text-white">系统配置</h1>
           <p className="text-slate-400 mt-1">
-            登录号码：<span className="text-cyan-400">{phoneNumber}</span>（将作为 AndroidAPS 白名单）
+            登录号码：<span className="text-cyan-400">{phoneNumber}</span>
           </p>
         </div>
-
-        {/* SMS Gateway Config */}
-        <Card className="border-slate-700 bg-slate-900/80">
-          <CardHeader>
-            <CardTitle className="text-white flex items-center gap-2">
-              <Send className="w-5 h-5 text-cyan-400" />
-              SMS 网关配置
-            </CardTitle>
-            <CardDescription className="text-slate-400">
-              配置短信网关，用于向 AndroidAPS 手机发送输注命令
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="space-y-2">
-              <Label className="text-slate-300">短信服务商</Label>
-              <Select value={provider} onValueChange={handleProviderChange}>
-                <SelectTrigger className="bg-slate-800 border-slate-600 text-white">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {SMS_PROVIDER_PRESETS.map((p) => (
-                    <SelectItem key={p.provider} value={p.provider}>{p.name}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              {preset?.helpText && (
-                <p className="text-xs text-slate-500 mt-1">{preset.helpText}</p>
-              )}
-            </div>
-
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label className="text-slate-300">API 地址</Label>
-                <Input value={apiUrl} onChange={(e) => setApiUrl(e.target.value)}
-                  placeholder={preset?.placeholder.apiUrl}
-                  className="bg-slate-800 border-slate-600 text-white" />
-              </div>
-              <div className="space-y-2">
-                <Label className="text-slate-300">API Key / ID</Label>
-                <Input value={apiKey} onChange={(e) => setApiKey(e.target.value)}
-                  placeholder={preset?.placeholder.apiKey}
-                  className="bg-slate-800 border-slate-600 text-white" />
-              </div>
-            </div>
-
-            {(provider === 'aliyun' || provider === 'tencent' || provider === 'twilio') && (
-              <div className="space-y-2">
-                <Label className="text-slate-300">API Secret / Token</Label>
-                <Input value={apiSecret} onChange={(e) => setApiSecret(e.target.value)}
-                  type="password" placeholder={preset?.placeholder.apiSecret}
-                  className="bg-slate-800 border-slate-600 text-white" />
-              </div>
-            )}
-
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label className="text-slate-300">发送方号码</Label>
-                <Input value={fromNumber} onChange={(e) => setFromNumber(e.target.value)}
-                  placeholder="网关分配的号码"
-                  className="bg-slate-800 border-slate-600 text-white" />
-              </div>
-              <div className="space-y-2">
-                <Label className="text-slate-300">接收方号码</Label>
-                <Input value={phoneNumber} disabled
-                  className="bg-slate-800/50 border-slate-600 text-slate-400" />
-                <p className="text-xs text-slate-500">自动使用登录手机号</p>
-              </div>
-            </div>
-
-            {(provider === 'aliyun' || provider === 'tencent') && (
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <Label className="text-slate-300">短信签名</Label>
-                  <Input value={signName} onChange={(e) => setSignName(e.target.value)}
-                    placeholder={preset?.placeholder.signName}
-                    className="bg-slate-800 border-slate-600 text-white" />
-                </div>
-                <div className="space-y-2">
-                  <Label className="text-slate-300">模板 ID</Label>
-                  <Input value={templateCode} onChange={(e) => setTemplateCode(e.target.value)}
-                    placeholder={preset?.placeholder.templateCode}
-                    className="bg-slate-800 border-slate-600 text-white" />
-                </div>
-              </div>
-            )}
-          </CardContent>
-        </Card>
 
         {/* Nightscout Config */}
         <Card className="border-slate-700 bg-slate-900/80">
@@ -353,6 +221,49 @@ function SetupScreen({
           </Button>
         </div>
       </div>
+    </div>
+  );
+}
+
+// ============================================================
+// Device Status Indicator
+// ============================================================
+function DeviceStatusIndicator({ phone }: { phone: string }) {
+  const [status, setStatus] = useState<'online' | 'offline' | 'not_registered' | 'loading'>('loading');
+
+  useEffect(() => {
+    const checkStatus = async () => {
+      try {
+        const res = await fetch(`/api/device/status?phone=${encodeURIComponent(phone)}`);
+        const data = await res.json();
+        if (data.success) {
+          setStatus(data.status);
+        } else {
+          setStatus('not_registered');
+        }
+      } catch {
+        setStatus('not_registered');
+      }
+    };
+
+    checkStatus();
+    const interval = setInterval(checkStatus, 10000);
+    return () => clearInterval(interval);
+  }, [phone]);
+
+  const config = {
+    online: { icon: <Wifi className="w-4 h-4" />, color: 'text-green-400', text: '设备在线' },
+    offline: { icon: <WifiOff className="w-4 h-4" />, color: 'text-amber-400', text: '设备离线' },
+    not_registered: { icon: <Smartphone className="w-4 h-4" />, color: 'text-slate-400', text: '设备未注册' },
+    loading: { icon: <Loader2 className="w-4 h-4 animate-spin" />, color: 'text-slate-400', text: '检测中...' },
+  };
+
+  const c = config[status];
+
+  return (
+    <div className={`flex items-center gap-2 text-sm ${c.color}`}>
+      {c.icon}
+      <span>{c.text}</span>
     </div>
   );
 }
@@ -450,17 +361,19 @@ function StatusPanel({ status, cgm, onRefresh, refreshing }: {
 }
 
 // ============================================================
-// Delivery Status Banner
+// Command Status Banner
 // ============================================================
-function DeliveryStatusBanner({ result }: { result: import('@/hooks/use-sms-command').DeliveryConfirmResult }) {
-  const statusConfig = {
+function CommandStatusBanner({ result }: { result: ReturnType<typeof useRemoteCommand>['result'] }) {
+  if (!result) return null;
+
+  const statusConfig: Record<string, { icon: React.ReactNode; color: string; text: string }> = {
     idle: { icon: null, color: '', text: '' },
-    sending_sms: { icon: <Loader2 className="w-4 h-4 animate-spin" />, color: 'text-cyan-400 bg-cyan-500/10 border-cyan-500/30', text: '正在发送短信命令...' },
-    sms_sent: { icon: <Send className="w-4 h-4" />, color: 'text-blue-400 bg-blue-500/10 border-blue-500/30', text: '短信已发送，等待 AndroidAPS 执行...' },
-    confirming: { icon: <Loader2 className="w-4 h-4 animate-spin" />, color: 'text-amber-400 bg-amber-500/10 border-amber-500/30', text: '正在通过 Nightscout 确认输注结果...' },
-    confirmed: { icon: <CheckCircle2 className="w-4 h-4" />, color: 'text-green-400 bg-green-500/10 border-green-500/30', text: result.message },
-    timeout: { icon: <AlertTriangle className="w-4 h-4" />, color: 'text-orange-400 bg-orange-500/10 border-orange-500/30', text: result.message },
-    failed: { icon: <XCircle className="w-4 h-4" />, color: 'text-red-400 bg-red-500/10 border-red-500/30', text: result.message },
+    creating: { icon: <Loader2 className="w-4 h-4 animate-spin" />, color: 'text-cyan-400 bg-cyan-500/10 border-cyan-500/30', text: '正在创建命令...' },
+    pending: { icon: <Send className="w-4 h-4" />, color: 'text-blue-400 bg-blue-500/10 border-blue-500/30', text: '命令已创建，等待设备执行...' },
+    executing: { icon: <Loader2 className="w-4 h-4 animate-spin" />, color: 'text-amber-400 bg-amber-500/10 border-amber-500/30', text: '设备正在执行命令...' },
+    completed: { icon: <CheckCircle2 className="w-4 h-4" />, color: 'text-green-400 bg-green-500/10 border-green-500/30', text: result.message || '命令执行成功' },
+    failed: { icon: <XCircle className="w-4 h-4" />, color: 'text-red-400 bg-red-500/10 border-red-500/30', text: result.message || '命令执行失败' },
+    expired: { icon: <AlertTriangle className="w-4 h-4" />, color: 'text-orange-400 bg-orange-500/10 border-orange-500/30', text: '命令已过期，设备未响应' },
   };
 
   const config = statusConfig[result.status];
@@ -478,19 +391,21 @@ function DeliveryStatusBanner({ result }: { result: import('@/hooks/use-sms-comm
 // Bolus / Carbs Input
 // ============================================================
 function BolusCarbsPanel({
+  phone,
   safetyLock,
   onBolus,
   onCarbs,
   onMixed,
   isSending,
-  deliveryResult,
+  commandResult,
 }: {
+  phone: string;
   safetyLock: ReturnType<typeof useSafetyLock>;
   onBolus: (amount: number) => void;
   onCarbs: (amount: number) => void;
   onMixed: (insulin: number, carbs: number) => void;
   isSending: boolean;
-  deliveryResult: import('@/hooks/use-sms-command').DeliveryConfirmResult | null;
+  commandResult: ReturnType<typeof useRemoteCommand>['result'];
 }) {
   const [insulin, setInsulin] = useState('');
   const [carbs, setCarbs] = useState('');
@@ -615,10 +530,8 @@ function BolusCarbsPanel({
         </Button>
       )}
 
-      {/* SMS Result */}
-      {deliveryResult && (
-        <DeliveryStatusBanner result={deliveryResult} />
-      )}
+      {/* Command Status */}
+      <CommandStatusBanner result={commandResult} />
 
       {/* Confirm Dialog */}
       <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
@@ -629,11 +542,11 @@ function BolusCarbsPanel({
               确认操作
             </AlertDialogTitle>
             <AlertDialogDescription className="text-slate-400">
-              {pendingAction?.type === 'bolus' && `将通过短信发送 BOLUS ${pendingAction.i}U 到 AndroidAPS`}
-              {pendingAction?.type === 'carbs' && `将通过短信发送 CARBS ${pendingAction.c}g 到 AndroidAPS`}
-              {pendingAction?.type === 'mixed' && `将通过短信发送 BOLUS ${pendingAction.i}U + CARBS ${pendingAction.c}g 到 AndroidAPS`}
+              {pendingAction?.type === 'bolus' && `将向 AndroidAPS 发送 BOLUS ${pendingAction.i}U 命令`}
+              {pendingAction?.type === 'carbs' && `将向 AndroidAPS 发送 CARBS ${pendingAction.c}g 命令`}
+              {pendingAction?.type === 'mixed' && `将向 AndroidAPS 发送 BOLUS ${pendingAction.i}U + CARBS ${pendingAction.c}g 命令`}
               <br /><br />
-              <span className="text-amber-400">请确认操作正确！短信发送后无法撤回。</span>
+              <span className="text-amber-400">请确认操作正确！命令发送后无法撤回。</span>
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -713,7 +626,7 @@ function Dashboard({
   const [activeTab, setActiveTab] = useState('control');
 
   const safetyLock = useSafetyLock();
-  const smsCmd = useSMSCommand(config?.sms || null);
+  const remoteCmd = useRemoteCommand(session.phoneNumber);
 
   const nsUrl = config?.nightscout.url || '';
   const nsSecret = config?.nightscout.apiSecret || '';
@@ -746,18 +659,18 @@ function Dashboard({
   }, [fetchData]);
 
   const handleBolus = async (amount: number) => {
-    const result = await smsCmd.sendAndConfirm('bolus', { insulin: amount }, nsUrl, nsSecret);
-    if (result.status === 'confirmed') safetyLock.recordBolus();
+    const result = await remoteCmd.sendCommand('bolus', { insulin: amount });
+    if (result.status === 'completed') safetyLock.recordBolus();
   };
 
   const handleCarbs = async (amount: number) => {
-    const result = await smsCmd.sendAndConfirm('carbs', { carbs: amount }, nsUrl, nsSecret);
-    if (result.status === 'confirmed') safetyLock.recordCarbs();
+    const result = await remoteCmd.sendCommand('carbs', { carbs: amount });
+    if (result.status === 'completed') safetyLock.recordCarbs();
   };
 
   const handleMixed = async (insulin: number, carbs: number) => {
-    const result = await smsCmd.sendAndConfirm('mixed', { insulin, carbs }, nsUrl, nsSecret);
-    if (result.status === 'confirmed') {
+    const result = await remoteCmd.sendCommand('mixed', { insulin, carbs });
+    if (result.status === 'completed') {
       safetyLock.recordBolus();
       safetyLock.recordCarbs();
     }
@@ -772,13 +685,13 @@ function Dashboard({
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-xl font-bold text-white">AndroidAPS 远程控制</h1>
-            <p className="text-sm text-slate-400">
-              <Phone className="w-3 h-3 inline mr-1" />
-              {session.phoneNumber}
-              <span className="ml-2 text-xs text-slate-500">
-                SMS 命令 → AndroidAPS
-              </span>
-            </p>
+            <div className="flex items-center gap-3 mt-1">
+              <p className="text-sm text-slate-400">
+                <Phone className="w-3 h-3 inline mr-1" />
+                {session.phoneNumber}
+              </p>
+              <DeviceStatusIndicator phone={session.phoneNumber} />
+            </div>
           </div>
           <div className="flex gap-2">
             <Button variant="ghost" size="sm" onClick={onOpenSettings} className="text-slate-400">
@@ -813,12 +726,13 @@ function Dashboard({
 
           <TabsContent value="control" className="mt-4">
             <BolusCarbsPanel
+              phone={session.phoneNumber}
               safetyLock={safetyLock}
               onBolus={handleBolus}
               onCarbs={handleCarbs}
               onMixed={handleMixed}
-              isSending={smsCmd.isSending}
-              deliveryResult={smsCmd.result}
+              isSending={remoteCmd.isSending}
+              commandResult={remoteCmd.result}
             />
           </TabsContent>
 
@@ -831,7 +745,7 @@ function Dashboard({
           <div className="p-4 rounded-md bg-amber-500/10 border border-amber-500/30 text-center">
             <p className="text-amber-400 text-sm">
               <AlertTriangle className="w-4 h-4 inline mr-1" />
-              请先完成 SMS 网关和 Nightscout 配置
+              请先完成 Nightscout 配置
               <Button variant="link" className="text-amber-400 underline ml-1" onClick={onOpenSettings}>
                 前往配置
               </Button>
@@ -866,7 +780,6 @@ export default function Home() {
     const s: UserSession = { phoneNumber: phone, loggedInAt: Date.now() };
     setSession(s);
     localStorage.setItem('aaps_session', JSON.stringify(s));
-    // Check if config exists for this phone
     const savedConfig = localStorage.getItem('aaps_config');
     if (!savedConfig) {
       setShowSetup(true);
