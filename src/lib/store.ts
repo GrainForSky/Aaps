@@ -8,31 +8,64 @@ import type {
   DeviceInfo,
   RemoteCommand,
   CommandStatus,
+  RateLimitEntry,
 } from '@/lib/types';
+import { RATE_LIMITS } from '@/lib/types';
+import crypto from 'crypto';
 
 // --- Device Registry ---
 const deviceRegistry = new Map<string, DeviceInfo>();
+// Token -> phone:deviceId mapping for fast lookup
+const tokenToDevice = new Map<string, string>();
 
-export function registerDevice(phone: string, deviceId: string, appVersion: string): DeviceInfo {
+/**
+ * Generate a secure device token
+ */
+export function generateDeviceToken(): string {
+  return crypto.randomBytes(32).toString('hex');
+}
+
+/**
+ * Register a device and return device token
+ */
+export function registerDevice(phone: string, deviceId: string, appVersion: string): DeviceInfo & { deviceToken: string } {
   const key = `${phone}:${deviceId}`;
   const now = Date.now();
   const existing = deviceRegistry.get(key);
+  const deviceToken = existing?.deviceToken ?? generateDeviceToken();
   const device: DeviceInfo = {
     phone,
     deviceId,
+    deviceToken,
     appVersion,
     registeredAt: existing?.registeredAt ?? now,
     lastHeartbeat: now,
     status: 'online',
   };
   deviceRegistry.set(key, device);
+  tokenToDevice.set(deviceToken, key);
+  return { ...device, deviceToken };
+}
+
+/**
+ * Validate device token and return device info
+ */
+export function validateDeviceToken(deviceToken: string): DeviceInfo | null {
+  const key = tokenToDevice.get(deviceToken);
+  if (!key) return null;
+  const device = deviceRegistry.get(key);
+  if (!device) return null;
+  // Token must match
+  if (device.deviceToken !== deviceToken) return null;
   return device;
 }
 
-export function updateHeartbeat(phone: string, deviceId: string): DeviceInfo | null {
+export function updateHeartbeat(phone: string, deviceId: string, deviceToken: string): DeviceInfo | null {
   const key = `${phone}:${deviceId}`;
   const device = deviceRegistry.get(key);
   if (!device) return null;
+  // Validate token
+  if (device.deviceToken !== deviceToken) return null;
   device.lastHeartbeat = Date.now();
   device.status = 'online';
   return device;
@@ -118,6 +151,36 @@ export function getCommand(id: string): RemoteCommand | null {
   return commandQueue.get(id) ?? null;
 }
 
+// --- Rate Limiting ---
+const rateLimitStore = new Map<string, RateLimitEntry>();
+
+/**
+ * Check rate limit for a given key
+ * Returns { allowed: boolean, remaining: number, resetAt: number }
+ */
+export function checkRateLimit(key: string, limit: { maxRequests: number; windowMs: number }): {
+  allowed: boolean;
+  remaining: number;
+  resetAt: number;
+} {
+  const now = Date.now();
+  const entry = rateLimitStore.get(key);
+
+  if (!entry || now - entry.firstRequest > limit.windowMs) {
+    // New window
+    rateLimitStore.set(key, { count: 1, firstRequest: now, lastRequest: now });
+    return { allowed: true, remaining: limit.maxRequests - 1, resetAt: now + limit.windowMs };
+  }
+
+  if (entry.count >= limit.maxRequests) {
+    return { allowed: false, remaining: 0, resetAt: entry.firstRequest + limit.windowMs };
+  }
+
+  entry.count++;
+  entry.lastRequest = now;
+  return { allowed: true, remaining: limit.maxRequests - entry.count, resetAt: entry.firstRequest + limit.windowMs };
+}
+
 // --- Cleanup expired commands (call periodically) ---
 export function cleanupExpiredCommands(): number {
   const now = Date.now();
@@ -132,6 +195,12 @@ export function cleanupExpiredCommands(): number {
   for (const [key, device] of deviceRegistry.entries()) {
     if (now - device.lastHeartbeat > 120000) {
       device.status = 'offline';
+    }
+  }
+  // Clean up old rate limit entries
+  for (const [key, entry] of rateLimitStore.entries()) {
+    if (now - entry.firstRequest > 300000) { // 5 minutes
+      rateLimitStore.delete(key);
     }
   }
   return cleaned;

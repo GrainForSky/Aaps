@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import crypto from 'crypto';
+import { checkRateLimit } from '@/lib/store';
+import { RATE_LIMITS } from '@/lib/types';
 
 function hashApiSecret(secret: string): string {
   return crypto.createHash('sha1').update(secret).digest('hex');
@@ -21,6 +23,15 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(
         { error: 'Missing Nightscout URL or API Secret' },
         { status: 400 }
+      );
+    }
+
+    // Rate limiting
+    const rateLimit = checkRateLimit('nightscout:config', RATE_LIMITS.NIGHTSCOUT_CONFIG);
+    if (!rateLimit.allowed) {
+      return NextResponse.json(
+        { error: '请求过于频繁，请稍后再试' },
+        { status: 429 }
       );
     }
 

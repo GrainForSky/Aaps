@@ -1,26 +1,45 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getPendingCommands } from '@/lib/store';
+import { getPendingCommands, validateDeviceToken } from '@/lib/store';
 
 /**
- * GET /api/device/commands?phone=xxx
- * AndroidAPS 设备轮询待执行命令
- * 设备每 5 秒调用一次，获取待执行的命令
+ * GET /api/device/commands?phone=xxx&deviceId=xxx&deviceToken=xxx
+ * 设备轮询待执行命令（每 5 秒调用一次）
+ * 需要 deviceToken 认证
  */
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
     const phone = searchParams.get('phone');
+    const deviceId = searchParams.get('deviceId');
+    const deviceToken = searchParams.get('deviceToken');
 
-    if (!phone) {
+    if (!phone || !deviceId || !deviceToken) {
       return NextResponse.json(
-        { success: false, message: '缺少 phone 参数' },
+        { success: false, message: '缺少 phone、deviceId 或 deviceToken 参数' },
         { status: 400 },
+      );
+    }
+
+    // Validate device token
+    const device = validateDeviceToken(deviceToken);
+    if (!device) {
+      return NextResponse.json(
+        { success: false, message: '设备认证失败，请重新注册' },
+        { status: 401 },
+      );
+    }
+
+    // Verify phone and deviceId match the token
+    if (device.phone !== phone || device.deviceId !== deviceId) {
+      return NextResponse.json(
+        { success: false, message: '设备信息不匹配' },
+        { status: 403 },
       );
     }
 
     const commands = getPendingCommands(phone);
 
-    // 标记为执行中
+    // Mark commands as executing when returned to device
     for (const cmd of commands) {
       cmd.status = 'executing';
     }

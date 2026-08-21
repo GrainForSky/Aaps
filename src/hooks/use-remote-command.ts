@@ -60,7 +60,9 @@ export function useRemoteCommand(phone: string): UseRemoteCommandReturn {
 
   const pollCommandStatus = useCallback(async (commandId: string) => {
     try {
-      const res = await fetch(`/api/command/status?id=${encodeURIComponent(commandId)}&phone=${encodeURIComponent(phone)}`);
+      const res = await fetch(`/api/command/status?id=${encodeURIComponent(commandId)}&phone=${encodeURIComponent(phone)}`, {
+        headers: { 'x-user-phone': phone },
+      });
       const data = await res.json();
 
       if (!data.success) {
@@ -127,7 +129,10 @@ export function useRemoteCommand(phone: string): UseRemoteCommandReturn {
       // Step 1: Create command
       const createRes = await fetch('/api/command/create', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'x-user-phone': phone,
+        },
         body: JSON.stringify({
           phone,
           type,

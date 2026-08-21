@@ -234,7 +234,9 @@ function DeviceStatusIndicator({ phone }: { phone: string }) {
   useEffect(() => {
     const checkStatus = async () => {
       try {
-        const res = await fetch(`/api/device/status?phone=${encodeURIComponent(phone)}`);
+        const res = await fetch(`/api/device/status?phone=${encodeURIComponent(phone)}`, {
+          headers: { 'x-user-phone': phone },
+        });
         const data = await res.json();
         if (data.success) {
           setStatus(data.status);

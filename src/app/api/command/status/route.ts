@@ -2,8 +2,9 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getCommand, getDeviceStatus } from '@/lib/store';
 
 /**
- * GET /api/command/status?id=xxx
+ * GET /api/command/status?id=xxx&phone=xxx
  * Web 前端查询命令执行状态
+ * 需要验证用户登录手机号与命令所属设备一致
  */
 export async function GET(request: NextRequest) {
   try {
@@ -18,12 +19,37 @@ export async function GET(request: NextRequest) {
       );
     }
 
+    // Verify user is logged in
+    const sessionHeader = request.headers.get('x-user-phone');
+    if (!sessionHeader) {
+      return NextResponse.json(
+        { success: false, message: '未登录，请先登录' },
+        { status: 401 },
+      );
+    }
+
     const command = getCommand(id);
 
     if (!command) {
       return NextResponse.json(
         { success: false, message: '命令不存在' },
         { status: 404 },
+      );
+    }
+
+    // Verify command belongs to this user
+    if (command.phone !== sessionHeader) {
+      return NextResponse.json(
+        { success: false, message: '无权查看此命令' },
+        { status: 403 },
+      );
+    }
+
+    // If phone param provided, verify it matches
+    if (phone && phone !== sessionHeader) {
+      return NextResponse.json(
+        { success: false, message: '无权查看此设备的命令' },
+        { status: 403 },
       );
     }
 

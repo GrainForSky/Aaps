@@ -23,6 +23,7 @@ export interface AppConfig {
 export interface DeviceInfo {
   phone: string;
   deviceId: string;
+  deviceToken: string; // 设备认证令牌
   appVersion: string;
   registeredAt: number;
   lastHeartbeat: number;
@@ -38,11 +39,17 @@ export interface DeviceRegisterRequest {
 export interface DeviceRegisterResponse {
   success: boolean;
   message: string;
+  deviceToken?: string; // 注册成功后返回设备令牌
 }
 
 export interface DeviceHeartbeatRequest {
   phone: string;
   deviceId: string;
+  deviceToken: string; // 设备认证令牌
+}
+
+export interface DeviceAuthRequest {
+  deviceToken: string;
 }
 
 // --- Command Queue ---
@@ -95,6 +102,7 @@ export interface ReportResultRequest {
   commandId: string;
   phone: string;
   deviceId: string;
+  deviceToken: string; // 设备认证令牌
   success: boolean;
   message: string;
   treatmentId?: string;
@@ -176,3 +184,21 @@ export const SAFETY_RULES = {
   HEARTBEAT_INTERVAL_SECONDS: 30,
   DEVICE_OFFLINE_SECONDS: 60,
 } as const;
+
+// --- Rate Limiting ---
+export interface RateLimitEntry {
+  count: number;
+  firstRequest: number;
+  lastRequest: number;
+}
+
+export const RATE_LIMITS = {
+  COMMAND_CREATE: { maxRequests: 10, windowMs: 60000 }, // 每分钟最多10次命令创建
+  DEVICE_REGISTER: { maxRequests: 5, windowMs: 60000 }, // 每分钟最多5次设备注册
+  DEVICE_HEARTBEAT: { maxRequests: 30, windowMs: 60000 }, // 每分钟最多30次心跳
+  NIGHTSCOUT_CONFIG: { maxRequests: 10, windowMs: 60000 }, // 每分钟最多10次配置测试
+} as const;
+
+// --- Input Validation ---
+export const PHONE_REGEX = /^1[3-9]\d{9}$/; // 中国大陆手机号格式
+export const DEVICE_ID_REGEX = /^[a-zA-Z0-9_-]{1,64}$/; // 设备ID格式

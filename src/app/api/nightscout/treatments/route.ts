@@ -13,6 +13,7 @@ function getHeaders(apiSecret: string): Record<string, string> {
 }
 
 // GET: Fetch treatment history
+// Now uses POST body instead of query params for API secret
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
@@ -98,18 +99,18 @@ export async function POST(request: NextRequest) {
     if (!response.ok) {
       const errorText = await response.text();
       return NextResponse.json(
-        { error: `Failed to submit treatment: ${response.status}`, detail: errorText },
+        { error: `Failed to create treatment: ${response.status}`, detail: errorText },
         { status: response.status }
       );
     }
 
     const data = await response.json();
-    return NextResponse.json({ success: true, data, treatment: treatmentPayload });
+    return NextResponse.json({ success: true, data });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
     const isNetworkError = message.includes('fetch failed') || message.includes('ECONNREFUSED') || message.includes('ENOTFOUND');
     return NextResponse.json(
-      { error: isNetworkError ? `无法连接到 Nightscout 服务器` : `Failed to submit treatment: ${message}` },
+      { error: isNetworkError ? `无法连接到 Nightscout 服务器` : `Failed to create treatment: ${message}` },
       { status: isNetworkError ? 502 : 500 }
     );
   }

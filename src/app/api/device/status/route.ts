@@ -4,6 +4,7 @@ import { getDeviceStatus } from '@/lib/store';
 /**
  * GET /api/device/status?phone=xxx
  * Web 前端查询设备在线状态
+ * 需要验证用户登录手机号与查询设备一致
  */
 export async function GET(request: NextRequest) {
   try {
@@ -14,6 +15,23 @@ export async function GET(request: NextRequest) {
       return NextResponse.json(
         { success: false, message: '缺少 phone 参数' },
         { status: 400 },
+      );
+    }
+
+    // Verify user is logged in
+    const sessionHeader = request.headers.get('x-user-phone');
+    if (!sessionHeader) {
+      return NextResponse.json(
+        { success: false, message: '未登录，请先登录' },
+        { status: 401 },
+      );
+    }
+
+    // Verify user can only query their own device
+    if (sessionHeader !== phone) {
+      return NextResponse.json(
+        { success: false, message: '无权查询此设备状态' },
+        { status: 403 },
       );
     }
 
